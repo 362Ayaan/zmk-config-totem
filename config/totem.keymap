@@ -131,7 +131,7 @@
             label = "LINE_SELECT";
         };
 
-        Autopair_Brackets: Autopair_Brackets {
+        Autopair_Bracket: Autopair_Brackets {
             compatible = "zmk,behavior-macro";
             #binding-cells = <0>;
             bindings =
@@ -222,10 +222,10 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-        &none  &none     &kp UP    &none      &none     &Autopair_Brace     &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
-        &none  &kp LEFT  &kp DOWN  &kp RIGHT  &none     &Autopair_Brackets  &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
-&trans  &none  &none     &none     &none      &none     &Autopair_Paren     &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &kp EQUAL
-                         &trans    &trans     &trans    &trans              &trans     &kp KP_NUMBER_0
+        &none  &none     &kp UP    &none      &none     &Autopair_Brace    &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
+        &none  &kp LEFT  &kp DOWN  &kp RIGHT  &none     &Autopair_Bracket  &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
+&trans  &none  &none     &none     &none      &none     &Autopair_Paren    &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &kp EQUAL
+                         &trans    &trans     &trans    &trans             &trans     &kp KP_NUMBER_0
             >;
         };
 
