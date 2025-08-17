@@ -95,14 +95,6 @@
     };
 
     macros {
-        Autopair_Paren: Autopair_Brackets {
-            compatible = "zmk,behavior-macro";
-            #binding-cells = <0>;
-            bindings = <&macro_press>, <&kp LPAR &kp RPAR &kp LEFT_ARROW>;
-
-            label = "AUTOPAIR_BRACKETS";
-        };
-
         Autopair_Quotes: Autopair_Quotes {
             compatible = "zmk,behavior-macro";
             #binding-cells = <0>;
@@ -149,6 +141,16 @@
                 <&kp LEFT_BRACE &kp RIGHT_BRACE &kp LEFT_ARROW>;
 
             label = "AUOTPAIR_BRACE";
+        };
+
+        Autopair_Parenthesis: Autopair_Parenthesis {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings =
+                <&macro_press>,
+                <&kp LEFT_PARENTHESIS &kp RIGHT_PARENTHESIS &kp LEFT_ARROW>;
+
+            label = "AUTOPAIR_PARENTHESIS";
         };
     };
 
@@ -222,10 +224,10 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-        &none  &none     &kp UP    &none      &none     &Autopair_Brace    &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
-        &none  &kp LEFT  &kp DOWN  &kp RIGHT  &none     &Autopair_Bracket  &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
-&trans  &none  &none     &none     &none      &none     &Autopair_Paren    &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &kp EQUAL
-                         &trans    &trans     &trans    &trans             &trans     &kp KP_NUMBER_0
+        &none  &none     &kp UP    &none      &none     &Autopair_Brace        &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
+        &none  &kp LEFT  &kp DOWN  &kp RIGHT  &none     &Autopair_Bracket      &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
+&trans  &none  &none     &none     &none      &none     &Autopair_Parenthesis  &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &kp EQUAL
+                         &trans    &trans     &trans    &trans                 &trans     &kp KP_NUMBER_0
             >;
         };
 
