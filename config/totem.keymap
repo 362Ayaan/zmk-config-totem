@@ -104,6 +104,26 @@
 
             label = "AUTOPAIR_QUOTES";
         };
+
+        selection_search: selection_search {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings =
+                <&macro_tap>,
+                <&kp LS(F10)>,
+                <&macro_wait_time 20>,
+                <&kp S>;
+
+            label = "SELECTION_SEARCH";
+        };
+
+        line_select: line_select {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp HOME &kp LS(END)>;
+
+            label = "LINE_SELECT";
+        };
     };
 
     keymap {
@@ -128,14 +148,14 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-               &kp Q  &kp W  &kp E         &kp R           &kp T          &none   &kp Y        &kp U  &kp I      &kp O
-               &kp A  &kp S  &kp D         &kp F           &kp G          &none   &kp H        &kp J  &kp K      &kp L
-&kp BACKSPACE  &kp Z  &kp X  &kp C         &kp V           &kp B          &none   &kp N        &kp M  &kp COMMA  &kp DOT  &kp ENTER
-                             &kp LEFT_ALT  &kp LEFT_SHIFT  &mt LCTRL X    &tog 3  &lt 2 SPACE  &sl 1
+               &kp Q  &kp W  &kp E                   &kp R           &kp T          &none   &kp Y      &kp U  &kp I      &kp O
+               &kp A  &kp S  &kp D                   &kp F           &kp G          &none   &kp H      &kp J  &kp K      &kp L
+&kp BACKSPACE  &kp Z  &kp X  &kp C                   &kp V           &kp B          &none   &kp N      &kp M  &kp COMMA  &kp DOT  &kp ENTER
+                             &mt LEFT_ALT BACKSPACE  &kp LEFT_SHIFT  &mt LCTRL X    &tog 2  &kp SPACE  &sl 1
             >;
         };
 
-        Sym_layer {
+        Sym+Macros {
             // ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 
             label = "SYM";
@@ -154,15 +174,15 @@
             bindings = <
         &kp EXCL  &kp AT  &kp HASH  &kp DLLR  &kp PRCNT    &kp CARET         &kp AMPS    &kp ASTERISK  &Autopair_Brackets  &kp EQUAL
         &trans    &trans  &trans    &trans    &trans       &kp C_MUTE        &kp C_PREV  &kp C_NEXT    &kp MINUS           &kp SEMICOLON
-&trans  &trans    &trans  &trans    &trans    &trans       &kp C_PLAY_PAUSE  &none       &trans        &trans              &kp SLASH      &Autopair_Quotes
+&trans  &trans    &trans  &trans    &trans    &trans       &kp C_PLAY_PAUSE  &none       &kp SLASH     &trans              &trans         &Autopair_Quotes
                           &trans    &trans    &trans       &trans            &trans      &trans
             >;
         };
 
-        nav_layer {
+        Nav_Num {
             // ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 
-            label = "NAVI";
+            label = "NAV";
 
             // ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
             //             ┏━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓   ┏━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓
@@ -176,10 +196,10 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-        &kp ESC    &bt BT_CLR  &kp UP    &kp EQUAL  &kp LBRC    &kp RBRC  &kp KP_N7  &kp KP_N8  &kp KP_N9  &kp KP_PLUS
-        &kp LSHFT  &kp LEFT    &kp DOWN  &kp RIGHT  &kp LBKT    &kp RBKT  &kp KP_N4  &kp KP_N5  &kp KP_N6  &kp KP_MINUS
-&trans  &kp MINUS  &kp PG_UP   &kp CAPS  &kp PG_DN  &kp LPAR    &kp RPAR  &kp KP_N1  &kp KP_N2  &kp KP_N3  &kp KP_MULTIPLY  &trans
-                               &trans    &trans     &trans      &trans    &trans     &trans
+        &kp ESC    &none      &kp UP    &kp EQUAL  &kp LBRC    &kp RBRC  &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
+        &kp LSHFT  &kp LEFT   &kp DOWN  &kp RIGHT  &kp LBKT    &kp RBKT  &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
+&trans  &kp MINUS  &kp PG_UP  &kp CAPS  &kp PG_DN  &kp LPAR    &kp RPAR  &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &trans
+                              &trans    &trans     &trans      &trans    &trans     &kp KP_NUMBER_0
             >;
         };
 
