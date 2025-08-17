@@ -152,6 +152,22 @@
 
             label = "AUTOPAIR_PARENTHESIS";
         };
+
+        closetab: closetab {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp LC(TAB)>;
+
+            label = "CLOSETAB";
+        };
+
+        reopentab: reopentab {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp LC(LS(TAB))>;
+
+            label = "REOPENTAB";
+        };
     };
 
     keymap {
@@ -200,10 +216,10 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-        &kp EXCL  &kp AT  &kp HASH  &kp DLLR      &kp PRCNT            &kp CARET         &kp AMPS      &kp ASTERISK  &Autopair_Paren  &kp EQUAL
-        &trans    &trans  &trans    &line_select  &selection_search    &kp C_PLAY_PAUSE  &kp C_PREV    &kp C_NEXT    &kp MINUS        &kp SEMICOLON
-&trans  &trans    &trans  &trans    &trans        &trans               &kp C_MUTE        &kp QUESTION  &kp SLASH     &trans           &trans         &Autopair_Quotes
-                          &trans    &trans        &trans               &trans            &trans        &trans
+        &kp EXCL  &kp AT             &kp HASH         &kp DLLR      &kp PRCNT            &kp CARET         &kp AMPS      &kp ASTERISK  &Autopair_Parenthesis  &kp EQUAL
+        &trans    &Autopair_Bracket  &Autopair_Brace  &line_select  &selection_search    &kp C_PLAY_PAUSE  &kp C_PREV    &kp C_NEXT    &kp MINUS              &kp SEMICOLON
+&trans  &trans    &trans             &trans           &trans        &trans               &kp C_MUTE        &kp QUESTION  &kp SLASH     &trans                 &trans         &Autopair_Quotes
+                                     &trans           &trans        &trans               &trans            &trans        &trans
             >;
         };
 
@@ -224,10 +240,10 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-        &none  &none     &kp UP    &none      &none     &Autopair_Brace        &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
-        &none  &kp LEFT  &kp DOWN  &kp RIGHT  &none     &Autopair_Bracket      &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
-&trans  &none  &none     &none     &none      &none     &Autopair_Parenthesis  &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &kp EQUAL
-                         &trans    &trans     &trans    &trans                 &trans     &kp KP_NUMBER_0
+        &none  &none     &kp UP    &none      &none     &kp K_SCROLL_UP    &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
+        &none  &kp LEFT  &kp DOWN  &kp RIGHT  &none     &kp K_SCROLL_DOWN  &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
+&trans  &none  &none     &none     &none      &none     &none              &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &trans
+                         &trans    &trans     &trans    &trans             &trans     &kp KP_NUMBER_0
             >;
         };
 
