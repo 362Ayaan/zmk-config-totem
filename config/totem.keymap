@@ -153,22 +153,6 @@
             label = "AUTOPAIR_PARENTHESIS";
         };
 
-        closetab: closetab {
-            compatible = "zmk,behavior-macro";
-            #binding-cells = <0>;
-            bindings = <&macro_press>, <&kp LC(TAB)>;
-
-            label = "CLOSETAB";
-        };
-
-        reopentab: reopentab {
-            compatible = "zmk,behavior-macro";
-            #binding-cells = <0>;
-            bindings = <&macro_press>, <&kp LC(LS(TAB))>;
-
-            label = "REOPENTAB";
-        };
-
         foward: new_macro {
             compatible = "zmk,behavior-macro";
             #binding-cells = <0>;
@@ -183,6 +167,46 @@
             bindings = <&macro_press>, <&kp LA(LEFT_ARROW)>;
 
             label = "BACKWARD";
+        };
+
+        next_tab: next_tab {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp LC(TAB)>;
+
+            label = "NEXT_TAB";
+        };
+
+        prev_tab: prev_tab {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp LC(LS(TAB))>;
+
+            label = "PREV_TAB";
+        };
+
+        new_tab: new_tab {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp LC(T)>;
+
+            label = "NEW_TAB";
+        };
+
+        close_tab: close_tab {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp LC(W)>;
+
+            label = "CLOSE_TAB";
+        };
+
+        reopen_tab: reopen_tab {
+            compatible = "zmk,behavior-macro";
+            #binding-cells = <0>;
+            bindings = <&macro_press>, <&kp LC(LS(W))>;
+
+            label = "REOPEN_TAB";
         };
     };
 
@@ -256,10 +280,10 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-        &none         &backward  &kp UP         &foward    &none      &kp K_SCROLL_UP    &kp KP_N7  &kp KP_N8  &kp KP_N9  &kp KP_PLUS
-        &none         &kp LEFT   &kp DOWN       &kp RIGHT  &none      &kp K_SCROLL_DOWN  &kp KP_N4  &kp KP_N5  &kp KP_N6  &kp KP_MINUS
-&trans  &kp LEFT_WIN  &kp HOME   &kp PAGE_DOWN  &kp PG_UP  &kp END    &kp KP_NUMBER_0    &kp KP_N1  &kp KP_N2  &kp KP_N3  &kp KP_MULTIPLY  &trans
-                                 &trans         &trans     &trans     &trans             &trans     &trans
+        &new_tab      &backward  &kp UP         &foward    &next_tab    &kp K_SCROLL_UP    &kp KP_N7  &kp KP_N8        &kp KP_N9  &kp KP_PLUS
+        &reopen_tab   &kp LEFT   &kp DOWN       &kp RIGHT  &prev_tab    &kp K_SCROLL_DOWN  &kp KP_N4  &kp KP_N5        &kp KP_N6  &kp KP_MINUS
+&trans  &kp LEFT_WIN  &kp HOME   &kp PAGE_DOWN  &kp PG_UP  &kp END      &close_tab         &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &trans
+                                 &trans         &trans     &trans       &trans             &trans     &kp KP_NUMBER_0
             >;
         };
 
@@ -280,10 +304,10 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-        &sys_reset   &bt BT_CLR  &out OUT_TOG  &trans  &trans    &trans  &kp F7  &kp F8  &kp F9  &kp F12
-        &bootloader  &bt BT_NXT  &trans        &trans  &trans    &trans  &kp F4  &kp F5  &kp F6  &kp F11
-&trans  &trans       &bt BT_PRV  &trans        &trans  &trans    &trans  &kp F1  &kp F2  &kp F3  &kp F10  &trans
-                                 &trans        &trans  &trans    &trans  &trans  &trans
+        &sys_reset   &bt BT_CLR  &out OUT_TOG  &trans  &kp C_VOLUME_UP      &trans  &kp F7  &kp F8  &kp F9  &kp F12
+        &bootloader  &bt BT_NXT  &trans        &trans  &kp C_VOLUME_DOWN    &trans  &kp F4  &kp F5  &kp F6  &kp F11
+&trans  &trans       &bt BT_PRV  &trans        &trans  &trans               &trans  &kp F1  &kp F2  &kp F3  &kp F10  &trans
+                                 &trans        &trans  &trans               &trans  &trans  &trans
             >;
         };
 
