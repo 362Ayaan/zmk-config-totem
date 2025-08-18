@@ -217,7 +217,7 @@
         reopen_tab: reopen_tab {
             compatible = "zmk,behavior-macro";
             #binding-cells = <0>;
-            bindings = <&macro_tap>, <&kp LC(LS(W))>;
+            bindings = <&macro_tap>, <&kp LC(LS(T))>;
 
             label = "REOPEN_TAB";
         };
