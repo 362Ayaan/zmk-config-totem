@@ -327,4 +327,35 @@
         // ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
         // ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
     };
+
+    /* Encoder behavior and sensor for EC11 encoder on Seeed XIAO nRF52840
+     * Wiring used: A = P1.11 (gpio1 11), B = P1.12 (gpio1 12)
+     * Clockwise -> C_VOLUME_UP, Counter-clockwise -> C_VOLUME_DOWN
+     */
+    behaviors {
+        enc_cw: encoder_cw {
+            compatible = "zmk,behavior-rotate-key-position";
+            label = "ENC_CW";
+            #binding-cells = <0>;
+            bindings = <&kp C_VOLUME_UP>;
+        };
+
+        enc_ccw: encoder_ccw {
+            compatible = "zmk,behavior-rotate-key-position";
+            label = "ENC_CCW";
+            #binding-cells = <0>;
+            bindings = <&kp C_VOLUME_DOWN>;
+        };
+    };
+
+    sensors {
+        encoder0: encoder0 {
+            compatible = "zmk,ec11-encoder";
+            a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            b-gpios = <&gpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            steps = <4>;
+            status = "okay";
+            bindings = <&enc_cw &enc_ccw>;
+        };
+    };
 };
