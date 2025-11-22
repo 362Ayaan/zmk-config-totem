@@ -41,19 +41,16 @@
             , <&xiao_d 3 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>
             ;
     };
-
-    /* EC11 rotary encoder connected to Seeed XIAO nRF52840 D6/D7 (P1.11/P1.12)
-     * A -> D6 (P1.11) mapped here as &xiao_d 6
-     * B -> D7 (P1.12) mapped here as &xiao_d 7
-     * Adjust flags if your wiring uses active-high or different pull configuration.
-     */
-    ec11_encoder: encoder0 {
-        compatible = "alps,ec11";
-        label = "EC11_0";
-        a-gpios = <&xiao_d 6 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-        b-gpios = <&xiao_d 7 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-        /* If your encoder has a push-button, add "button-gpios = <&xiao_d X ...>;" */
-        steps = <4>;
-        status = "okay";
+    sensors {
+        encoder0: encoder0 {
+            compatible = "zmk,ec11-encoder";
+            a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            b-gpios = <&gpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            steps = <4>;
+            status = "okay";
+            bindings = <&enc_cw &enc_ccw>;
+        };
     };
 };
+
+
