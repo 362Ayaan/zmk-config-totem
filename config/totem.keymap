@@ -69,7 +69,7 @@
             timeout-ms = <50>;
         };
 
-        combo_P {
+        combo_p {
             bindings = <&kp P>;
             key-positions = <30 19>;
             timeout-ms = <50>;
