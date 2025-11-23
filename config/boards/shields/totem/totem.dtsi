@@ -43,7 +43,7 @@
     };
     sensors {
         encoder0: encoder0 {
-            compatible = "zmk,ec11-encoder";
+            compatible = "alps,ec11";
             a-gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
             b-gpios = <&gpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
             steps = <4>;
