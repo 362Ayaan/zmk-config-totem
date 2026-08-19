@@ -23,6 +23,8 @@ Confirm that the module is the four-pin I2C 128x64 variant and that its header i
 
 The overlay expects the common I2C address `0x3C`. If the physical module uses `0x3D`, change `reg = <0x3c>;` in `xiao_ssd1306.overlay` before building.
 
+The SSD1306 uses a dedicated ZMK display work queue so live layer and WPM events cannot be delayed by split/USB work on the system queue.
+
 ## Firmware artifacts
 
 | Artifact | Device | Purpose |
