@@ -2,6 +2,15 @@
 
 if SHIELD_XIAO_SSD1306
 
+choice ZMK_DISPLAY_STATUS_SCREEN
+    default ZMK_DISPLAY_STATUS_SCREEN_CUSTOM
+endchoice
+
+config ZMK_DISPLAY_STATUS_SCREEN_CUSTOM
+    select LV_OBJ_LABEL
+    select LV_FONT_UNSCII_8
+    select LV_FONT_MONTSERRAT_32
+
 config I2C
     default y
 

@@ -23,7 +23,9 @@ Confirm that the module is the four-pin I2C 128x64 variant and that its header i
 
 The overlay expects the common I2C address `0x3C`. If the physical module uses `0x3D`, change `reg = <0x3c>;` in `xiao_ssd1306.overlay` before building.
 
-The SSD1306 uses a dedicated ZMK display work queue so live layer and WPM events cannot be delayed by split/USB work on the system queue.
+The SSD1306 uses a dedicated ZMK display work queue. Its compact custom screen shows the active
+layer in large text, plus the actual left/right peripheral battery levels and selected USB/Bluetooth
+output. It intentionally avoids WPM and icon glyphs.
 
 ## Left EC11 encoder
 
