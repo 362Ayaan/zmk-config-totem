@@ -25,6 +25,12 @@ The overlay expects the common I2C address `0x3C`. If the physical module uses `
 
 The SSD1306 uses a dedicated ZMK display work queue so live layer and WPM events cannot be delayed by split/USB work on the system queue.
 
+## Left EC11 encoder
+
+The hand-wired encoder is enabled only on the left half. For the encoder's three rotation pins, connect one outer pin to XIAO `D6`, the center/common pin to `GND`, and the other outer pin to `D7`. The outer pins may be swapped if the direction is reversed. The reversible TOTEMX footprint mirrors these nets onto the PCB underside, so backside soldering is valid after confirming each pad by continuity to the corresponding XIAO castellated pin.
+
+The firmware uses 20 detents per rotation and sends consumer volume up/down on every layer. The encoder push switch is not configured.
+
 ## Firmware artifacts
 
 | Artifact | Device | Purpose |
@@ -55,4 +61,4 @@ Do not flash either keyboard half until the dongle firmware builds and the OLED 
 3. Flash `settings-reset.uf2`, then `rollback-right-peripheral.uf2`, to the right half.
 4. Power on the left half first, then the right half, and re-pair the left half with the computer if required.
 
-The EC11 experiment is intentionally not included. Its unverified custom devicetree behavior was removed from this branch so dongle/display work stays independent of encoder debugging.
+The corrected EC11 implementation was added in commit `a0d570e` and validated by GitHub Actions run 41.
