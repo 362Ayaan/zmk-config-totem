@@ -5,6 +5,7 @@
 
 #include <lvgl.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/util.h>
 
 #include <zmk/ble.h>
 #include <zmk/display.h>
@@ -22,6 +23,12 @@ static lv_obj_t *left_battery_label;
 static lv_obj_t *output_label;
 static lv_obj_t *right_battery_label;
 static lv_obj_t *layer_label;
+static lv_style_t screen_style;
+static lv_style_t header_style;
+static lv_style_t layer_style;
+
+BUILD_ASSERT(CONFIG_LV_Z_MEM_POOL_SIZE >= 10000,
+             "The custom SSD1306 screen requires at least a 10 KB LVGL pool");
 
 struct layer_status_state {
     const char *name;
@@ -113,31 +120,57 @@ ZMK_DISPLAY_WIDGET_LISTENER(clean_output_status, struct output_status_state, out
 ZMK_SUBSCRIPTION(clean_output_status, zmk_endpoint_changed);
 ZMK_SUBSCRIPTION(clean_output_status, zmk_ble_active_profile_changed);
 
-static void style_plain_label(lv_obj_t *label, const lv_font_t *font) {
-    lv_obj_set_style_text_font(label, font, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(label, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(label, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(label, 0, LV_PART_MAIN);
+static void init_styles(void) {
+    lv_style_init(&screen_style);
+    lv_style_set_bg_color(&screen_style, lv_color_black());
+    lv_style_set_bg_opa(&screen_style, LV_OPA_COVER);
+    lv_style_set_border_width(&screen_style, 0);
+    lv_style_set_pad_all(&screen_style, 0);
+
+    lv_style_init(&header_style);
+    lv_style_set_text_font(&header_style, &lv_font_unscii_8);
+    lv_style_set_text_color(&header_style, lv_color_white());
+    lv_style_set_bg_opa(&header_style, LV_OPA_TRANSP);
+    lv_style_set_border_width(&header_style, 0);
+    lv_style_set_pad_all(&header_style, 0);
+
+    lv_style_init(&layer_style);
+    lv_style_set_text_font(&layer_style, &lv_font_montserrat_32);
+    lv_style_set_text_color(&layer_style, lv_color_white());
+    lv_style_set_bg_opa(&layer_style, LV_OPA_TRANSP);
+    lv_style_set_border_width(&layer_style, 0);
+    lv_style_set_pad_all(&layer_style, 0);
 }
 
 lv_obj_t *zmk_display_status_screen(void) {
-    lv_obj_t *screen = lv_obj_create(NULL);
+    init_styles();
 
-    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(screen, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
+    lv_obj_t *screen = lv_obj_create(NULL);
+    if (screen == NULL) {
+        return NULL;
+    }
+
+    lv_obj_add_style(screen, &screen_style, LV_PART_MAIN);
 
     left_battery_label = lv_label_create(screen);
     output_label = lv_label_create(screen);
     right_battery_label = lv_label_create(screen);
     layer_label = lv_label_create(screen);
 
-    style_plain_label(left_battery_label, &lv_font_unscii_8);
-    style_plain_label(output_label, &lv_font_unscii_8);
-    style_plain_label(right_battery_label, &lv_font_unscii_8);
-    style_plain_label(layer_label, &lv_font_montserrat_32);
+    if (left_battery_label == NULL || output_label == NULL || right_battery_label == NULL ||
+        layer_label == NULL) {
+        left_battery_label = NULL;
+        output_label = NULL;
+        right_battery_label = NULL;
+        layer_label = NULL;
+        lv_obj_del(screen);
+        return NULL;
+    }
+
+    lv_obj_add_style(left_battery_label, &header_style, LV_PART_MAIN);
+    lv_obj_add_style(output_label, &header_style, LV_PART_MAIN);
+    lv_obj_add_style(right_battery_label, &header_style, LV_PART_MAIN);
+    lv_obj_add_style(layer_label, &layer_style, LV_PART_MAIN);
 
     lv_obj_align(left_battery_label, LV_ALIGN_TOP_LEFT, 2, 3);
     lv_obj_align(right_battery_label, LV_ALIGN_TOP_RIGHT, -2, 3);

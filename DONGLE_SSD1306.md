@@ -27,6 +27,10 @@ The SSD1306 uses a dedicated ZMK display work queue. Its compact custom screen s
 layer in large text, plus the actual left/right peripheral battery levels and selected USB/Bluetooth
 output. It intentionally avoids WPM and icon glyphs.
 
+The custom UI reserves a 10 KB LVGL memory pool and checks every screen-object allocation before
+registering its event listeners. A display allocation failure therefore cannot dereference a null UI
+object during boot.
+
 ## Left EC11 encoder
 
 The hand-wired encoder is enabled only on the left half. For the encoder's three rotation pins, connect one outer pin to XIAO `D6`, the center/common pin to `GND`, and the other outer pin to `D7`. The outer pins may be swapped if the direction is reversed. The reversible TOTEMX footprint mirrors these nets onto the PCB underside, so backside soldering is valid after confirming each pad by continuity to the corresponding XIAO castellated pin.
