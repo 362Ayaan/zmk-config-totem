@@ -260,6 +260,8 @@
 &kp BACKSPACE  &kp Z  &kp X  &kp C                   &kp V           &none        &mt LCTRL B       &kp N      &kp M  &kp COMMA  &kp DOT  &kp ENTER
                              &mt LEFT_ALT BACKSPACE  &kp LEFT_SHIFT  &kp LCTRL    &tog 2            &kp SPACE  &sl 1
             >;
+
+            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         Sym+Macros {
@@ -284,6 +286,8 @@
 &kp GRAVE  &trans            &trans             &trans           &trans        &kp BACKSLASH        &kp SLASH   &trans      &trans        &trans                 &trans         &kp SQT
                                                 &trans           &trans        &trans               &trans      &trans      &trans
             >;
+
+            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         Nav_Num {
@@ -308,6 +312,8 @@
 &trans  &trans  &kp PAGE_DOWN  &kp DOWN      &kp PAGE_UP  &kp C_VOLUME_DOWN    &kp C_VOL_UP  &kp KP_N1  &kp KP_N2        &kp KP_N3  &kp KP_MULTIPLY  &trans
                                &trans        &trans       &trans               &trans        &trans     &kp KP_NUMBER_0
             >;
+
+            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         adjust_layer {
@@ -332,6 +338,8 @@
 &trans  &trans      &bt BT_PRV  &trans        &trans              &bootloader          &bootloader  &kp F1  &kp F2  &kp F3  &kp F10  &trans
                                 &trans        &trans              &trans               &trans       &trans  &trans
             >;
+
+            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         // ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
