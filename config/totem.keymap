@@ -16,11 +16,10 @@
 #include <dt-bindings/zmk/outputs.h>
 
 #define BASE 0
-#define NAV  1
-#define SYM  2
-#define ADJ  3
-#define TVP1 4
-#define TVP2 5
+#define SYM  1
+#define NAV  2
+#define CAD  3
+#define ADJ  4
 
 &mt {
     quick-tap-ms = <100>;
@@ -82,7 +81,7 @@
         };
 
         combo_Shyr1 {
-            bindings = <&tog 3>;
+            bindings = <&tog ADJ>;
             key-positions = <4 5>;
             timeout-ms = <50>;
         };
@@ -233,6 +232,16 @@
         };
     };
 
+    behaviors {
+        tab_encoder: tab_encoder {
+            compatible = "zmk,behavior-sensor-rotate";
+            #sensor-binding-cells = <0>;
+
+            /* The left EC11's tested electrical direction is reversed. */
+            bindings = <&prev_tab>, <&next_tab>;
+        };
+    };
+
     keymap {
         compatible = "zmk,keymap";
 
@@ -255,13 +264,13 @@
             //                                     ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛   ┗━━━━━━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━┛
 
             bindings = <
-               &kp Q  &kp W  &kp E                   &kp R           &kp T        &mt TAB O         &kp Y      &kp U  &kp I      &kp O
-               &kp A  &kp S  &kp D                   &kp F           &none        &mt LEFT_SHIFT G  &kp H      &kp J  &kp K      &kp L
-&kp BACKSPACE  &kp Z  &kp X  &kp C                   &kp V           &none        &mt LCTRL B       &kp N      &kp M  &kp COMMA  &kp DOT  &kp ENTER
-                             &mt LEFT_ALT BACKSPACE  &kp LEFT_SHIFT  &kp LCTRL    &tog 2            &kp SPACE  &sl 1
+               &kp Q  &kp W  &kp E                   &kp R           &kp T          &tog CAD          &kp Y      &kp U  &kp I      &kp O
+               &kp A  &kp S  &kp D                   &kp F           &kp DELETE     &mt LEFT_SHIFT G  &kp H      &kp J  &kp K      &kp L
+&kp BACKSPACE  &kp Z  &kp X  &kp C                   &kp V           &kp K_CMENU    &mt LCTRL B       &kp N      &kp M  &kp COMMA  &kp DOT  &kp ENTER
+                             &mt LEFT_ALT BACKSPACE  &kp LEFT_SHIFT  &kp LCTRL      &tog NAV          &kp SPACE  &sl SYM
             >;
 
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
+            sensor-bindings = <&tab_encoder &inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         Sym+Macros {
@@ -287,7 +296,7 @@
                                                 &trans           &trans        &trans               &trans      &trans      &trans
             >;
 
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
+            sensor-bindings = <&tab_encoder &inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         Nav_Num {
@@ -313,7 +322,21 @@
                                &trans        &trans       &trans               &trans        &trans     &kp KP_NUMBER_0
             >;
 
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
+            sensor-bindings = <&tab_encoder &inc_dec_kp C_VOL_UP C_VOL_DN>;
+        };
+
+        cad_layer {
+            label = "CAD";
+
+            bindings = <
+           &trans  &trans  &trans  &trans  &trans  &tog CAD    &trans  &trans  &trans  &trans
+           &trans  &trans  &trans  &trans  &trans  &trans      &trans  &trans  &trans  &trans
+&trans     &trans  &trans  &trans  &trans  &trans  &trans      &trans  &trans  &trans  &trans  &trans
+                                    &trans  &trans  &trans      &trans  &trans  &trans
+            >;
+
+            /* Left: CCW/CW = left/right. Right: CCW/CW = up/down. */
+            sensor-bindings = <&inc_dec_kp LEFT_ARROW RIGHT_ARROW &inc_dec_kp DOWN_ARROW UP_ARROW>;
         };
 
         adjust_layer {
@@ -339,7 +362,7 @@
                                 &trans        &trans              &trans               &trans       &trans  &trans
             >;
 
-            sensor-bindings = <&inc_dec_kp C_VOL_UP C_VOL_DN>;
+            sensor-bindings = <&tab_encoder &inc_dec_kp C_VOL_UP C_VOL_DN>;
         };
 
         // ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

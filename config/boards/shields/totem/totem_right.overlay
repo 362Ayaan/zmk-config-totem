@@ -33,3 +33,8 @@
             ;
     };
 };
+
+/* Enable the hand-wired EC11 on the right half. */
+&right_encoder {
+    status = "okay";
+};

@@ -30,7 +30,7 @@
     };
 };
 
-/* The hand-wired EC11 is fitted only to the left half. */
+/* Enable the hand-wired EC11 on the left half. */
 &left_encoder {
     status = "okay";
 };
