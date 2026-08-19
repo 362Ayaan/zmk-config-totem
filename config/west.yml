@@ -5,7 +5,8 @@ manifest:
   projects:
     - name: zmk
       remote: zmkfirmware
-      revision: main
+      # Pinned to the inspected 2026-08-11 ZMK revision for reproducible builds.
+      revision: 6e2ef41e022d555b10f116e395832913f71717b3
       import: app/west.yml
   self:
     path: config

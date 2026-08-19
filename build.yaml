@@ -1,6 +1,27 @@
 include:
-  - board: seeeduino_xiao_ble
+  # Phase 1 dongle: spare XIAO is the split central and drives the OLED.
+  - board: xiao_ble//zmk
+    shield: totem_dongle xiao_ssd1306
+    artifact-name: dongle-ssd1306
+
+  # Keyboard halves become BLE peripherals only after the dongle is ready.
+  - board: xiao_ble//zmk
     shield: totem_left
-  - board: seeeduino_xiao_ble
+    cmake-args: -DCONFIG_ZMK_SPLIT=y -DCONFIG_ZMK_SPLIT_ROLE_CENTRAL=n
+    artifact-name: left-peripheral
+  - board: xiao_ble//zmk
     shield: totem_right
-# there is no settingsreset (needed) for the XIAO
+    cmake-args: -DCONFIG_ZMK_SPLIT=y -DCONFIG_ZMK_SPLIT_ROLE_CENTRAL=n
+    artifact-name: right-peripheral
+
+  - board: xiao_ble//zmk
+    shield: settings_reset
+    artifact-name: settings-reset
+
+  # Rollback images restore the original left-central split architecture.
+  - board: xiao_ble//zmk
+    shield: totem_left
+    artifact-name: rollback-left-central
+  - board: xiao_ble//zmk
+    shield: totem_right
+    artifact-name: rollback-right-peripheral
