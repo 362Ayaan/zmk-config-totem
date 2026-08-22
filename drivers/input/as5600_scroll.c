@@ -66,7 +66,8 @@ static int16_t as5600_wrapped_delta(uint16_t current, uint16_t previous) {
 }
 
 static uint8_t as5600_acceleration(const struct as5600_scroll_config *cfg, int16_t delta) {
-    uint32_t speed = ((uint32_t)ABS(delta) * 1000U) / cfg->poll_interval_ms;
+    uint32_t magnitude = delta < 0 ? (uint32_t)(-(int32_t)delta) : (uint32_t)delta;
+    uint32_t speed = (magnitude * 1000U) / cfg->poll_interval_ms;
 
     if (speed >= cfg->fast_threshold) {
         return cfg->fast_multiplier;
