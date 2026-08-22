@@ -14,6 +14,12 @@ include:
     cmake-args: -DCONFIG_ZMK_SPLIT=y -DCONFIG_ZMK_SPLIT_ROLE_CENTRAL=n
     artifact-name: right-peripheral
 
+  # Standalone AS5600 dial; it forwards wheel events to the dongle over ZMK split BLE.
+  - board: xiao_ble//zmk
+    shield: totem_dial
+    cmake-args: -DCONFIG_ZMK_SPLIT=y -DCONFIG_ZMK_SPLIT_ROLE_CENTRAL=n
+    artifact-name: as5600-dial-peripheral
+
   - board: xiao_ble//zmk
     shield: settings_reset
     artifact-name: settings-reset

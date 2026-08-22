@@ -1,0 +1,45 @@
+description: AS5600 magnetic angle sensor exposed as an accelerated wheel input
+
+compatible: "ayaan,as5600-scroll"
+
+include: i2c-device.yaml
+
+properties:
+  poll-interval-ms:
+    type: int
+    default: 4
+    description: Time between angle samples.
+
+  startup-delay-ms:
+    type: int
+    default: 100
+    description: Delay before the first sample, allowing the sensor to settle.
+
+  counts-per-scroll:
+    type: int
+    default: 32
+    description: Raw AS5600 counts that produce one wheel unit at low speed.
+
+  acceleration-threshold:
+    type: int
+    default: 1800
+    description: Raw counts per second at which acceleration starts.
+
+  acceleration-multiplier:
+    type: int
+    default: 2
+    description: Multiplier above acceleration-threshold.
+
+  fast-threshold:
+    type: int
+    default: 7000
+    description: Raw counts per second at which the fast multiplier starts.
+
+  fast-multiplier:
+    type: int
+    default: 4
+    description: Multiplier above fast-threshold.
+
+  invert-scroll:
+    type: boolean
+    description: Reverse the generated vertical wheel direction.

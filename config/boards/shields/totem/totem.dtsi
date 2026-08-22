@@ -48,6 +48,23 @@
         sensors = <&left_encoder &right_encoder>;
         triggers-per-rotation = <20>;
     };
+
+    split_inputs {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        dial_split: dial_split@0 {
+            compatible = "zmk,input-split";
+            reg = <0>;
+            status = "disabled";
+        };
+    };
+
+    dial_listener: dial_listener {
+        compatible = "zmk,input-listener";
+        device = <&dial_split>;
+        status = "disabled";
+    };
 };
 
 

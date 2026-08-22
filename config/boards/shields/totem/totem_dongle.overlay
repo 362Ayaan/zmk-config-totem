@@ -14,3 +14,11 @@
         events = <0>;
     };
 };
+
+&dial_split {
+    status = "okay";
+};
+
+&dial_listener {
+    status = "okay";
+};

@@ -6,7 +6,9 @@ url: https://github.com/GEIGEIGEIST/TOTEM
 requires: [seeed_xiao]
 features:
   - keys
+  - pointer
 siblings:
   - totem_left
   - totem_right
   - totem_dongle
+  - totem_dial

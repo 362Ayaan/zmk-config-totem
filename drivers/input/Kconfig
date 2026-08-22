@@ -1,0 +1,12 @@
+if INPUT
+
+config INPUT_AS5600_SCROLL
+    bool "AS5600 magnetic dial scroll input"
+    default y
+    depends on I2C
+    depends on DT_HAS_AYAAN_AS5600_SCROLL_ENABLED
+    help
+      Poll an AS5600 absolute magnetic encoder and emit accelerated vertical
+      wheel events through Zephyr's input subsystem.
+
+endif

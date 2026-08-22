@@ -1,0 +1,38 @@
+/* Standalone XIAO nRF52840 + AS5600 split peripheral. */
+
+#include "totem.dtsi"
+
+/ {
+    chosen {
+        zmk,kscan = &dial_mock_kscan;
+    };
+
+    dial_mock_kscan: dial_mock_kscan_0 {
+        compatible = "zmk,kscan-mock";
+        columns = <0>;
+        rows = <0>;
+        events = <0>;
+    };
+};
+
+&xiao_i2c {
+    status = "okay";
+
+    as5600_scroll: as5600@36 {
+        compatible = "ayaan,as5600-scroll";
+        reg = <0x36>;
+        status = "okay";
+
+        poll-interval-ms = <4>;
+        counts-per-scroll = <32>;
+        acceleration-threshold = <1800>;
+        acceleration-multiplier = <2>;
+        fast-threshold = <7000>;
+        fast-multiplier = <4>;
+    };
+};
+
+&dial_split {
+    status = "okay";
+    device = <&as5600_scroll>;
+};

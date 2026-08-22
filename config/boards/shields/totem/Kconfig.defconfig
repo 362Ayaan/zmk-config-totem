@@ -20,18 +20,34 @@ config ZMK_SPLIT_ROLE_CENTRAL
     default y
 
 config ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS
-    default 2
+    default 3
 
-# Two split peripherals plus ZMK's five Bluetooth host profiles.
+# Three split peripherals plus ZMK's five Bluetooth host profiles.
 config BT_MAX_CONN
-    default 7
+    default 8
 
 config BT_MAX_PAIRED
-    default 7
+    default 8
 
 endif
 
-if SHIELD_TOTEM_LEFT || SHIELD_TOTEM_RIGHT || SHIELD_TOTEM_DONGLE
+if SHIELD_TOTEM_DIAL
+
+config ZMK_KEYBOARD_NAME
+    default "MX Dial"
+
+config ZMK_SPLIT_ROLE_CENTRAL
+    default n
+
+config I2C
+    default y
+
+config ZMK_POINTING
+    default y
+
+endif
+
+if SHIELD_TOTEM_LEFT || SHIELD_TOTEM_RIGHT || SHIELD_TOTEM_DONGLE || SHIELD_TOTEM_DIAL
 
 config ZMK_SPLIT
     default y

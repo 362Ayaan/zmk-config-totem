@@ -1,0 +1,2 @@
+zephyr_library()
+zephyr_library_sources_ifdef(CONFIG_INPUT_AS5600_SCROLL as5600_scroll.c)
