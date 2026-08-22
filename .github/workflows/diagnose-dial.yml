@@ -40,7 +40,7 @@ jobs:
       - name: Publish diagnostic tail
         shell: bash
         run: |
-          tail -n 40 /tmp/dial-build.log \
+          tail -n 40 /tmp/dial-build.log | tac \
             | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g' \
             | while IFS= read -r line; do echo "::error file=.github/workflows/diagnose-dial.yml,line=1,title=AS5600 dial build::$line"; done
           exit "$(cat /tmp/dial-build.status)"
