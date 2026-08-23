@@ -9,4 +9,13 @@ config INPUT_AS5600_SCROLL
       Poll an AS5600 absolute magnetic encoder and emit accelerated vertical
       wheel events through Zephyr's input subsystem.
 
+
+config INPUT_AS5600_SCROLL_DIAGNOSTICS
+    bool "Verbose AS5600 dial diagnostics"
+    default n
+    depends on INPUT_AS5600_SCROLL
+    help
+      Log a roughly 1 Hz raw-angle heartbeat plus one line per emitted wheel
+      event. Intended only for temporary USB-logging bring-up images; leave
+      this off in release firmware, where the poll rate would flood the log.
 endif

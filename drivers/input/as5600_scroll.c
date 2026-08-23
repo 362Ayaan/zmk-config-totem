@@ -43,6 +43,11 @@ struct as5600_scroll_data {
     bool initialized;
     bool read_error_logged;
     bool diagnostics_logged;
+#if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
+    uint32_t diag_polls;
+    uint16_t diag_min;
+    uint16_t diag_max;
+#endif
 };
 
 static void as5600_log_diagnostics(const struct device *dev) {
@@ -137,6 +142,11 @@ static void as5600_scroll_work_cb(struct k_work *work) {
     if (!data->initialized) {
         data->previous_angle = angle;
         data->initialized = true;
+#if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
+        data->diag_polls = 0;
+        data->diag_min = angle;
+        data->diag_max = angle;
+#endif
         goto reschedule;
     }
 
@@ -154,7 +164,29 @@ static void as5600_scroll_work_cb(struct k_work *work) {
         wheel = CLAMP(wheel, INT16_MIN, INT16_MAX);
         data->accumulator -= wheel * cfg->counts_per_scroll;
         input_report_rel(dev, INPUT_REL_WHEEL, (int16_t)wheel, true, K_NO_WAIT);
+#if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
+        LOG_INF("dial: wheel=%d angle=%u delta=%d", (int)wheel, (unsigned int)angle, (int)delta);
+#endif
     }
+
+#if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
+    /* Heartbeat that separates "AS5600 is static" from "moving but emitting
+     * no wheel events", without logging at the poll rate. span is the raw
+     * min/max window, so a pass through 0 reads large; that is expected. */
+    if (angle < data->diag_min) {
+        data->diag_min = angle;
+    }
+    if (angle > data->diag_max) {
+        data->diag_max = angle;
+    }
+    if (++data->diag_polls * cfg->poll_interval_ms >= 1000U) {
+        LOG_INF("dial: angle=%u span=%u accum=%d", (unsigned int)angle,
+                (unsigned int)(data->diag_max - data->diag_min), (int)data->accumulator);
+        data->diag_polls = 0;
+        data->diag_min = angle;
+        data->diag_max = angle;
+    }
+#endif
 
 reschedule:
     k_work_schedule(&data->work, K_MSEC(cfg->poll_interval_ms));

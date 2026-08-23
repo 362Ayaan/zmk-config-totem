@@ -31,3 +31,16 @@ include:
   - board: xiao_ble//zmk
     shield: totem_right
     artifact-name: rollback-right-peripheral
+
+  # Temporary bring-up images: identical to the release builds above, plus USB
+  # CDC logging, and on the dial also per-event driver instrumentation. Use
+  # these only to isolate which stage is failing (AS5600 -> dial I2C,
+  # dial -> dongle split BLE, dongle -> host HID). Not daily firmware.
+  - board: xiao_ble//zmk
+    shield: totem_dial
+    cmake-args: -DCONFIG_ZMK_SPLIT=y -DCONFIG_ZMK_SPLIT_ROLE_CENTRAL=n -DCONFIG_ZMK_USB_LOGGING=y -DCONFIG_ZMK_LOG_LEVEL=4 -DCONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS=y
+    artifact-name: as5600-dial-peripheral-debug
+  - board: xiao_ble//zmk
+    shield: totem_dongle xiao_ssd1306
+    cmake-args: -DCONFIG_ZMK_USB_LOGGING=y -DCONFIG_ZMK_LOG_LEVEL=4
+    artifact-name: dongle-ssd1306-debug
