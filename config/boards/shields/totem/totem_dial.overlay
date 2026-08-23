@@ -15,8 +15,32 @@
     };
 };
 
+/* This XIAO has a failed D5 pin, so route TWIM SCL to D3 instead. */
+&pinctrl {
+    dial_i2c_default: dial_i2c_default {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 4)>,
+                    <NRF_PSEL(TWIM_SCL, 0, 29)>;
+            bias-pull-up;
+        };
+    };
+
+    dial_i2c_sleep: dial_i2c_sleep {
+        group1 {
+            psels = <NRF_PSEL(TWIM_SDA, 0, 4)>,
+                    <NRF_PSEL(TWIM_SCL, 0, 29)>;
+            low-power-enable;
+            bias-pull-up;
+        };
+    };
+};
+
 &xiao_i2c {
     status = "okay";
+    pinctrl-0 = <&dial_i2c_default>;
+    pinctrl-1 = <&dial_i2c_sleep>;
+    pinctrl-names = "default", "sleep";
+    clock-frequency = <400000>;
 
     as5600_scroll: as5600@36 {
         compatible = "ayaan,as5600-scroll";

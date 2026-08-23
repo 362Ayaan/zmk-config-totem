@@ -9,22 +9,42 @@ input-split transport to reach the dongle.
 
 Power both boards off before connecting wires.
 
-| AS5600 module | XIAO nRF52840 | Purpose |
-|---|---|---|
-| VCC | 3V3 | 3.3 V power |
-| GND | GND | Ground |
-| SDA | D4 / SDA | I2C data |
-| SCL | D5 / SCL | I2C clock |
-| DIR | leave open | Direction is handled in firmware |
-| OUT | leave open | The firmware uses I2C, not analog/PWM output |
+**Fault and fix:** D5 is dead on this XIAO, so the firmware intentionally moves
+SCL to D3. If a build reports no device at `0x36`, check this wiring first.
+
+| AS5600 module | XIAO nRF52840 |
+|---|---|
+| VCC | 3V3 |
+| GND | GND |
+| SDA | D4 |
+| SCL | D3 |
+| DIR | leave open |
+| OUT | leave open |
 
 Use 3.3 V, not 5 V. Many AS5600 breakout boards pull SDA and SCL up to VCC, so
 powering such a board at 5 V can put 5 V on the XIAO's 3.3 V GPIO. The fixed
-AS5600 I2C address is `0x36`.
+AS5600 I2C address is `0x36`. It acknowledges at that address even when no
+magnet is present, so a missing ACK is always a wiring or power problem. The
+bus runs at 400 kHz, which the sensor supports.
 
 Mount a diametrically magnetized magnet centered over the AS5600. If the dial
 does not respond or behaves erratically, magnet placement and air gap are the
 first things to check.
+
+## Bring-up diagnostics
+
+The AS5600 reports a 12-bit absolute angle. Magnet quality is judged with AGC,
+which spans 0-128 at 3.3 V; the useful target is 30-90. The hand-held test read
+38, which is good, but re-check it after the magnet is clamped in the printed
+case because the final gap can change it.
+
+If a stationary angle appears to drift at roughly 50 Hz, read AGC first. Treat
+that as a magnet gap/alignment symptom, not an electrical I2C symptom.
+
+Multi-turn position is accumulated by firmware from consecutive 12-bit angle
+samples. That accumulated turn count is lost on reset; an application that
+needs absolute turn count to survive reboot must persist it separately. The
+scroll-dial firmware does not need persistent turn count.
 
 ## Firmware artifacts
 
