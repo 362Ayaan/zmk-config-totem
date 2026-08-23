@@ -130,8 +130,25 @@ routed to D3 and SDA remains on D4. The bus is configured for 400 kHz.
 | GND | GND |
 | SDA | D4 |
 | SCL | D3 |
-| DIR | leave open |
+| DIR | **GND — must NOT be left floating** |
 | OUT | leave open |
+
+**DIR must be tied, not left open.** Leaving it floating was the cause of
+the erratic scrolling. The AS5600 DIR pin selects rotation direction: low
+gives `angle`, high gives `4095 - angle`. Floating, it acts as an antenna,
+picks up 50 Hz mains hum, and flips the reported angle between a value and
+its 12-bit complement 50 times a second.
+
+The signature is unmistakable once you look for it: the two alternating
+states always sum to 4095. Measured pairs were 3546/549 and 2790/1305 on
+the bench and 3306/790 and 3249/847 over ZMK. It also explains why the
+swing amplitude appeared to change when the magnet moved -- the span is
+`|2A - 4095|`, so it varies with resting angle, which is easy to misread as
+the magnet getting better or worse.
+
+AGC is what settles it. With DIR floating and AGC a healthy 78, the angle
+still flipped full-scale. A weak magnet cannot read 78, so field strength
+was never the fault. Tie DIR to GND (or to 3V3 to reverse direction).
 
 Important bring-up rules from the Arduino/Claude investigation:
 
