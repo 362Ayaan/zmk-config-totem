@@ -49,6 +49,8 @@
 
         poll-interval-ms = <4>;
         counts-per-scroll = <32>;
+        max-delta-counts = <512>;
+        deadband-counts = <4>;
         acceleration-threshold = <1800>;
         acceleration-multiplier = <2>;
         fast-threshold = <7000>;

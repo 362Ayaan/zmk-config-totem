@@ -28,6 +28,8 @@ struct as5600_scroll_config {
     uint16_t poll_interval_ms;
     uint16_t startup_delay_ms;
     uint16_t counts_per_scroll;
+    uint16_t max_delta_counts;
+    uint16_t deadband_counts;
     uint32_t acceleration_threshold;
     uint8_t acceleration_multiplier;
     uint32_t fast_threshold;
@@ -47,6 +49,7 @@ struct as5600_scroll_data {
     uint32_t diag_polls;
     uint16_t diag_min;
     uint16_t diag_max;
+    uint32_t diag_rejected;
 #endif
 };
 
@@ -122,6 +125,7 @@ static void as5600_scroll_work_cb(struct k_work *work) {
     const struct as5600_scroll_config *cfg = dev->config;
     uint16_t angle;
     int16_t delta;
+    uint32_t magnitude;
     int32_t wheel;
     int err = as5600_read_angle(cfg, &angle);
 
@@ -144,6 +148,7 @@ static void as5600_scroll_work_cb(struct k_work *work) {
         data->initialized = true;
 #if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
         data->diag_polls = 0;
+        data->diag_rejected = 0;
         data->diag_min = angle;
         data->diag_max = angle;
 #endif
@@ -151,23 +156,42 @@ static void as5600_scroll_work_cb(struct k_work *work) {
     }
 
     delta = as5600_wrapped_delta(angle, data->previous_angle);
-    data->previous_angle = angle;
+    magnitude = (delta < 0) ? (uint32_t)(-(int32_t)delta) : (uint32_t)delta;
 
-    if (cfg->invert_scroll) {
-        delta = -delta;
-    }
-
-    data->accumulator += (int32_t)delta * as5600_acceleration(cfg, delta);
-
-    wheel = data->accumulator / cfg->counts_per_scroll;
-    if (wheel != 0) {
-        wheel = CLAMP(wheel, INT16_MIN, INT16_MAX);
-        data->accumulator -= wheel * cfg->counts_per_scroll;
-        input_report_rel(dev, INPUT_REL_WHEEL, (int16_t)wheel, true, K_NO_WAIT);
+    if (cfg->max_delta_counts != 0 && magnitude > cfg->max_delta_counts) {
+        /* A hand-turned knob cannot move this far between two polls: at the
+         * default 4 ms / 512 counts that is over 30 rev/s. Such a jump is a
+         * sensor artefact, in practice a weak magnet letting mains hum swing
+         * the measured field. Resync the reference and emit nothing, so a
+         * single bad sample cannot become hundreds of wheel clicks by way of
+         * the acceleration multiplier. */
+        data->previous_angle = angle;
 #if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
-        LOG_INF("dial: wheel=%d angle=%u delta=%d", (int)wheel, (unsigned int)angle, (int)delta);
+        data->diag_rejected++;
 #endif
+    } else if (magnitude >= cfg->deadband_counts) {
+        data->previous_angle = angle;
+
+        if (cfg->invert_scroll) {
+            delta = -delta;
+        }
+
+        data->accumulator += (int32_t)delta * as5600_acceleration(cfg, delta);
+
+        wheel = data->accumulator / cfg->counts_per_scroll;
+        if (wheel != 0) {
+            wheel = CLAMP(wheel, INT16_MIN, INT16_MAX);
+            data->accumulator -= wheel * cfg->counts_per_scroll;
+            input_report_rel(dev, INPUT_REL_WHEEL, (int16_t)wheel, true, K_NO_WAIT);
+#if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
+            LOG_INF("dial: wheel=%d angle=%u delta=%d", (int)wheel, (unsigned int)angle,
+                    (int)delta);
+#endif
+        }
     }
+    /* Otherwise the movement is inside the deadband, and previous_angle is
+     * deliberately left alone: slow genuine rotation keeps accumulating
+     * against the held reference instead of being erased sample by sample. */
 
 #if IS_ENABLED(CONFIG_INPUT_AS5600_SCROLL_DIAGNOSTICS)
     /* Heartbeat that separates "AS5600 is static" from "moving but emitting
@@ -180,9 +204,11 @@ static void as5600_scroll_work_cb(struct k_work *work) {
         data->diag_max = angle;
     }
     if (++data->diag_polls * cfg->poll_interval_ms >= 1000U) {
-        LOG_INF("dial: angle=%u span=%u accum=%d", (unsigned int)angle,
-                (unsigned int)(data->diag_max - data->diag_min), (int)data->accumulator);
+        LOG_INF("dial: angle=%u span=%u accum=%d rejected=%u", (unsigned int)angle,
+                (unsigned int)(data->diag_max - data->diag_min), (int)data->accumulator,
+                (unsigned int)data->diag_rejected);
         data->diag_polls = 0;
+        data->diag_rejected = 0;
         data->diag_min = angle;
         data->diag_max = angle;
     }
@@ -219,6 +245,8 @@ static int as5600_scroll_init(const struct device *dev) {
         .poll_interval_ms = DT_INST_PROP(n, poll_interval_ms),                                    \
         .startup_delay_ms = DT_INST_PROP(n, startup_delay_ms),                                    \
         .counts_per_scroll = DT_INST_PROP(n, counts_per_scroll),                                  \
+        .max_delta_counts = DT_INST_PROP(n, max_delta_counts),                                    \
+        .deadband_counts = DT_INST_PROP(n, deadband_counts),                                      \
         .acceleration_threshold = DT_INST_PROP(n, acceleration_threshold),                        \
         .acceleration_multiplier = DT_INST_PROP(n, acceleration_multiplier),                      \
         .fast_threshold = DT_INST_PROP(n, fast_threshold),                                        \

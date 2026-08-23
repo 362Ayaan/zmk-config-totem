@@ -43,3 +43,22 @@ properties:
   invert-scroll:
     type: boolean
     description: Reverse the generated vertical wheel direction.
+
+  max-delta-counts:
+    type: int
+    default: 512
+    description: |
+      Largest plausible change in raw counts between two polls. Anything
+      larger is treated as a sensor artefact, discarded, and the reference
+      resynced, so one bad sample cannot be amplified into hundreds of wheel
+      clicks. At the default 4 ms poll, 512 counts is over 30 rev/s, far
+      beyond a hand-turned knob. Set to 0 to disable the check.
+
+  deadband-counts:
+    type: int
+    default: 4
+    description: |
+      Movements smaller than this hold the reference angle still instead of
+      following it, so low-level jitter cannot random-walk the accumulator.
+      Slow genuine rotation still accumulates against the held reference and
+      is not lost; it simply resolves in deadband-sized steps.
