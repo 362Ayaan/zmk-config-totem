@@ -1,5 +1,8 @@
 # AS5600 scroll dial
 
+For repository provenance, implementation details, and a staged diagnosis of a
+non-scrolling dial, see [AS5600_HANDOFF.md](AS5600_HANDOFF.md).
+
 This repository builds a standalone Seeed XIAO nRF52840 + AS5600 dial as the
 third BLE peripheral of the existing TOTEM dongle. The sensor becomes a Zephyr
 input device, emits accelerated vertical-wheel events, and uses ZMK's standard
