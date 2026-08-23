@@ -204,9 +204,18 @@ static void as5600_scroll_work_cb(struct k_work *work) {
         data->diag_max = angle;
     }
     if (++data->diag_polls * cfg->poll_interval_ms >= 1000U) {
-        LOG_INF("dial: angle=%u span=%u accum=%d rejected=%u", (unsigned int)angle,
+        uint8_t agc = 0;
+
+        /* Reading AGC once per second turns this image into a live
+         * magnet-positioning tool: adjust the gap in the assembled case
+         * and watch the number move. On 3.3 V the range is 0-128 and the
+         * target is 30-90; 128 railed means the field is too weak and
+         * mains hum will dominate the measured angle. */
+        (void)i2c_reg_read_byte_dt(&cfg->bus, AS5600_REG_AGC, &agc);
+
+        LOG_INF("dial: angle=%u span=%u accum=%d rejected=%u agc=%u", (unsigned int)angle,
                 (unsigned int)(data->diag_max - data->diag_min), (int)data->accumulator,
-                (unsigned int)data->diag_rejected);
+                (unsigned int)data->diag_rejected, (unsigned int)agc);
         data->diag_polls = 0;
         data->diag_rejected = 0;
         data->diag_min = angle;
