@@ -1,0 +1,66 @@
+name: Diagnose Merry target
+
+on:
+  push:
+    branches: [codex/dongle-ssd1306]
+    paths:
+      - '.github/workflows/diagnose-merry.yml'
+      - 'config/boards/shields/xiao_st7789_merry/**'
+      - 'config/west.yml'
+
+jobs:
+  merry:
+    runs-on: ubuntu-latest
+    container:
+      image: zmkfirmware/zmk-build-arm:stable
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare pinned ZMK workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_dir="$(mktemp -d)"
+          build_dir="$(mktemp -d)"
+          echo "base_dir=$base_dir" >> "$GITHUB_ENV"
+          echo "build_dir=$build_dir" >> "$GITHUB_ENV"
+          mkdir "$base_dir/config"
+          cp -R config/* "$base_dir/config/"
+
+      - name: Cache west modules
+        uses: actions/cache@v6
+        continue-on-error: true
+        with:
+          path: |
+            ${{ env.base_dir }}/modules/
+            ${{ env.base_dir }}/tools/
+            ${{ env.base_dir }}/zephyr/
+            ${{ env.base_dir }}/bootloader/
+            ${{ env.base_dir }}/zmk/
+          key: ${{ runner.os }}-merry-${{ hashFiles('config/west.yml') }}
+
+      - name: Fetch pinned modules
+        working-directory: ${{ env.base_dir }}
+        run: |
+          west init -l config
+          west update --fetch-opt=--filter=tree:0
+          west zephyr-export
+
+      - name: Build Merry and expose exact failure
+        working-directory: ${{ env.base_dir }}
+        shell: bash
+        run: |
+          set +e
+          west build -s zmk/app -d "$build_dir" -b xiao_ble//zmk -- \
+            -DZMK_CONFIG="$base_dir/config" \
+            -DSHIELD="totem_dongle xiao_st7789_merry" 2>&1 | tee /tmp/merry-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            details="$(grep -E '(^|[[:space:]])(error:|fatal error:|CMake Error|devicetree error:)|undefined symbol|FAILED:' /tmp/merry-build.log | tail -n 40 | tr '\n' '|' | sed 's/%/%25/g;s/\r/%0D/g')"
+            if [ -z "$details" ]; then
+              details="$(tail -n 80 /tmp/merry-build.log | tr '\n' '|' | sed 's/%/%25/g;s/\r/%0D/g')"
+            fi
+            echo "::error title=Merry pinned-ZMK failure::$details"
+          fi
+          exit "$status"
+
