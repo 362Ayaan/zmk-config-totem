@@ -1,0 +1,7 @@
+file_format: "1"
+id: xiao_st7789_merry
+name: XIAO ST7789 Merry Pet Display
+type: shield
+requires: [seeed_xiao]
+features:
+  - display

@@ -1,0 +1,146 @@
+{
+  "source": "C:\\Users\\Ayaan\\AppData\\Local\\Temp\\browser-use\\assets\\93ab3dbd-9dce-41e3-885b-578eb5ce3cfd\\6d675a34edf272e8.webp",
+  "source_url": "https://codex-pets.net/#/pets/merry",
+  "attribution": "Merry by jeansolopreneur on codex-pets.net",
+  "format_version": 1,
+  "frame_width": 160,
+  "frame_height": 174,
+  "frame_count": 57,
+  "animation_count": 9,
+  "palette_colors_per_frame": 15,
+  "packed_bytes_per_frame": 13920,
+  "pack_bytes": 795832,
+  "pack_crc32": "dad8c759",
+  "content_crc32": "aa48e0e8",
+  "animations": [
+    {
+      "id": 0,
+      "name": "idle",
+      "frames": 6,
+      "loop": true,
+      "durations_ms": [
+        280,
+        110,
+        110,
+        140,
+        140,
+        320
+      ]
+    },
+    {
+      "id": 1,
+      "name": "running-right",
+      "frames": 8,
+      "loop": true,
+      "durations_ms": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        220
+      ]
+    },
+    {
+      "id": 2,
+      "name": "running-left",
+      "frames": 8,
+      "loop": true,
+      "durations_ms": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        220
+      ]
+    },
+    {
+      "id": 3,
+      "name": "waving",
+      "frames": 4,
+      "loop": false,
+      "durations_ms": [
+        140,
+        140,
+        140,
+        280
+      ]
+    },
+    {
+      "id": 4,
+      "name": "jumping",
+      "frames": 5,
+      "loop": false,
+      "durations_ms": [
+        140,
+        140,
+        140,
+        140,
+        280
+      ]
+    },
+    {
+      "id": 5,
+      "name": "failed",
+      "frames": 8,
+      "loop": false,
+      "durations_ms": [
+        140,
+        140,
+        140,
+        140,
+        140,
+        140,
+        140,
+        240
+      ]
+    },
+    {
+      "id": 6,
+      "name": "waiting",
+      "frames": 6,
+      "loop": true,
+      "durations_ms": [
+        150,
+        150,
+        150,
+        150,
+        150,
+        260
+      ]
+    },
+    {
+      "id": 7,
+      "name": "running",
+      "frames": 6,
+      "loop": true,
+      "durations_ms": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        220
+      ]
+    },
+    {
+      "id": 8,
+      "name": "review",
+      "frames": 6,
+      "loop": true,
+      "durations_ms": [
+        150,
+        150,
+        150,
+        150,
+        150,
+        280
+      ]
+    }
+  ]
+}

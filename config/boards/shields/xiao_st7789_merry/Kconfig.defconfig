@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+
+if SHIELD_XIAO_ST7789_MERRY
+
+choice ZMK_DISPLAY_STATUS_SCREEN
+    default ZMK_DISPLAY_STATUS_SCREEN_CUSTOM
+endchoice
+
+config ZMK_DISPLAY_STATUS_SCREEN_CUSTOM
+    select LV_USE_LABEL
+    select LV_USE_IMAGE
+    select LV_FONT_MONTSERRAT_16
+    select LV_FONT_MONTSERRAT_20
+    select LV_FONT_MONTSERRAT_32
+
+config ZMK_DISPLAY
+    default y
+
+config SPI
+    default y
+
+config ST7789V
+    default y
+
+config PWM
+    default y
+
+config LED
+    default y
+
+config MERRY_SCREEN_OFF_DELAY_MS
+    int "Delay from pet mode to display off (milliseconds)"
+    default 300000
+    range 10000 3600000
+
+choice ST7789V_PIXEL_FORMAT
+    default ST7789V_RGB565
+endchoice
+
+if LVGL
+
+config LV_Z_VDB_SIZE
+    default 10
+
+config LV_DPI_DEF
+    default 261
+
+config LV_Z_BITS_PER_PIXEL
+    default 16
+
+choice LV_COLOR_DEPTH
+    default LV_COLOR_DEPTH_16
+endchoice
+
+config LV_COLOR_16_SWAP
+    default y
+
+endif # LVGL
+
+endif # SHIELD_XIAO_ST7789_MERRY

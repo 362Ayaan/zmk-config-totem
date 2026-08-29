@@ -4,6 +4,12 @@ include:
     shield: totem_dongle xiao_ssd1306
     artifact-name: dongle-ssd1306
 
+  # New 240x240 target. Kept separate so the proven SSD1306 firmware remains
+  # available as a rollback while Merry is brought up on hardware.
+  - board: xiao_ble//zmk
+    shield: totem_dongle xiao_st7789_merry
+    artifact-name: dongle-st7789-merry
+
   # Keyboard halves become BLE peripherals only after the dongle is ready.
   - board: xiao_ble//zmk
     shield: totem_left
