@@ -60,5 +60,10 @@ jobs:
             # lines before CMake's final error, so preserve the complete tail.
             details="$(tail -n 120 /tmp/merry-build.log | tr '\n' '|' | sed 's/%/%25/g;s/\r/%0D/g')"
             echo "::error title=Merry pinned-ZMK failure::$details"
+          else
+            memory="$(grep -A 5 'Memory region' /tmp/merry-build.log | tail -n 6 | tr '\n' '|' | sed 's/%/%25/g;s/\r/%0D/g')"
+            warning_count="$(grep -c 'warning:' /tmp/merry-build.log || true)"
+            echo "::notice title=Merry linker memory::$memory"
+            echo "::notice title=Merry compiler warnings::$warning_count warning lines"
           fi
           exit "$status"
