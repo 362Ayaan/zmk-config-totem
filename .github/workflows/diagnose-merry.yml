@@ -56,11 +56,9 @@ jobs:
             -DSHIELD="totem_dongle xiao_st7789_merry" 2>&1 | tee /tmp/merry-build.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            details="$(grep -E '(^|[[:space:]])(error:|fatal error:|CMake Error|devicetree error:)|undefined symbol|FAILED:' /tmp/merry-build.log | tail -n 40 | tr '\n' '|' | sed 's/%/%25/g;s/\r/%0D/g')"
-            if [ -z "$details" ]; then
-              details="$(tail -n 80 /tmp/merry-build.log | tr '\n' '|' | sed 's/%/%25/g;s/\r/%0D/g')"
-            fi
+            # Devicetree diagnostics often put the useful schema message a few
+            # lines before CMake's final error, so preserve the complete tail.
+            details="$(tail -n 120 /tmp/merry-build.log | tr '\n' '|' | sed 's/%/%25/g;s/\r/%0D/g')"
             echo "::error title=Merry pinned-ZMK failure::$details"
           fi
           exit "$status"
-
