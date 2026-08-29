@@ -19,9 +19,11 @@ needed before redistributing the art or firmware bundle.
 
 ## Updating without reflashing ZMK
 
-After the ST7789 firmware has been flashed once, Windows exposes a separate CDC
-serial port alongside the normal keyboard HID device. Close any serial monitor,
-then run:
+After the ST7789 firmware has been flashed once, Windows exposes the XIAO's CDC
+serial port alongside the normal keyboard HID device. Windows assigns the COM
+number dynamically; it is not compiled into the firmware. Close any serial
+monitor, identify the port by unplugging/reconnecting the dongle or with Device
+Manager, then run:
 
 ```powershell
 .\tools\upload_merry_pet.ps1 -Port COM12

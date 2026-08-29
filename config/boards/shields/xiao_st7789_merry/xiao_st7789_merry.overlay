@@ -11,7 +11,11 @@
 
     aliases {
         merry-flash = &p25q16h;
-        merry-uart = &merry_cdc;
+        /* The XIAO board already supplies this CDC ACM interface. Reuse it
+         * for pet uploads so the composite USB device contains one CDC
+         * function alongside ZMK HID, rather than two competing ports.
+         */
+        merry-uart = &board_cdc_acm_uart;
     };
 
     merry_pwm_leds: pwmleds {
@@ -91,10 +95,4 @@
     pinctrl-0 = <&merry_pwm1_default>;
     pinctrl-1 = <&merry_pwm1_sleep>;
     pinctrl-names = "default", "sleep";
-};
-
-&zephyr_udc0 {
-    merry_cdc: merry_cdc {
-        compatible = "zephyr,cdc-acm-uart";
-    };
 };
