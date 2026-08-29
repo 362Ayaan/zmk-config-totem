@@ -187,4 +187,4 @@ static void upload_thread(void *unused1, void *unused2, void *unused3) {
     }
 }
 
-K_THREAD_DEFINE(merry_upload_thread, 2048, upload_thread, NULL, NULL, NULL, 12, 0, 0);
+K_THREAD_DEFINE(merry_upload_thread, 3072, upload_thread, NULL, NULL, NULL, 12, 0, 0);
