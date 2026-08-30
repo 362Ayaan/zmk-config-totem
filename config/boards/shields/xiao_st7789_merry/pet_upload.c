@@ -2,6 +2,7 @@
 
 #include "pet_store.h"
 #include "merry_config.h"
+#include "merry_codex_state.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -23,9 +24,14 @@
 #define STORE_STATUS_MAGIC 0x3154534du /* MST1 */
 #define STORE_CLEAR_MAGIC 0x314c434du /* MCL1 */
 #define STORE_RESPONSE_MAGIC 0x3152534du /* MSR1 */
+#define CODEX_STATE_MAGIC 0x3153434du /* MCS1 */
+#define CODEX_RESPONSE_MAGIC 0x3141434du /* MCA1 */
 #define UPLOAD_CHUNK_SIZE 512u
 #define UPLOAD_READY_SEQUENCE 0xffffu
 #define UPLOAD_FINAL_SEQUENCE 0xfffeu
+#define CODEX_STATE_VERSION 1u
+#define CODEX_MIN_TTL_MS 5000u
+#define CODEX_MAX_TTL_MS 60000u
 
 enum upload_status {
     UPLOAD_OK = 0,
@@ -56,6 +62,13 @@ enum config_status {
 enum store_status {
     STORE_OK = 0,
     STORE_CLEAR_FAILED = 1,
+};
+
+enum codex_status {
+    CODEX_OK = 0,
+    CODEX_BAD_HEADER = 1,
+    CODEX_BAD_CRC = 2,
+    CODEX_BAD_STATE = 3,
 };
 
 struct upload_header {
@@ -92,6 +105,21 @@ struct store_response {
     struct pet_store_status store;
 } __packed;
 
+struct codex_state_request {
+    uint8_t version;
+    uint8_t state;
+    uint16_t sequence;
+    uint32_t ttl_ms;
+    uint32_t crc32;
+} __packed;
+
+struct codex_state_response {
+    uint32_t magic;
+    uint8_t status;
+    uint8_t state;
+    uint16_t sequence;
+} __packed;
+
 BUILD_ASSERT(DT_NODE_HAS_STATUS(MERRY_UART_NODE, okay), "Merry CDC UART alias is not ready");
 BUILD_ASSERT(sizeof(struct upload_header) == 12u, "upload header layout changed");
 BUILD_ASSERT(sizeof(struct chunk_header) == 8u, "chunk header layout changed");
@@ -99,6 +127,8 @@ BUILD_ASSERT(sizeof(struct config_request) == 24u, "config request layout change
 BUILD_ASSERT(sizeof(struct config_response) == 28u, "config response layout changed");
 BUILD_ASSERT(sizeof(struct pet_store_status) == 16u, "pet store status layout changed");
 BUILD_ASSERT(sizeof(struct store_response) == 24u, "pet store response layout changed");
+BUILD_ASSERT(sizeof(struct codex_state_request) == 12u, "Codex request layout changed");
+BUILD_ASSERT(sizeof(struct codex_state_response) == 8u, "Codex response layout changed");
 
 static const struct device *const upload_uart = DEVICE_DT_GET(MERRY_UART_NODE);
 
@@ -151,11 +181,53 @@ static int wait_for_command(uint32_t *command) {
         }
         window = (window >> 8) | ((uint32_t)byte << 24);
         if (window == UPLOAD_MAGIC || window == CONFIG_MAGIC || window == STORE_STATUS_MAGIC ||
-            window == STORE_CLEAR_MAGIC) {
+            window == STORE_CLEAR_MAGIC || window == CODEX_STATE_MAGIC) {
             *command = window;
             return 0;
         }
     }
+}
+
+static void codex_expire_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+    (void)merry_codex_state_set(MERRY_ANIM_IDLE);
+}
+
+K_WORK_DELAYABLE_DEFINE(codex_expire_work, codex_expire_work_callback);
+
+static void send_codex_response(enum codex_status status, uint16_t sequence) {
+    const struct codex_state_response response = {
+        .magic = CODEX_RESPONSE_MAGIC,
+        .status = status,
+        .state = merry_codex_state_get(),
+        .sequence = sequence,
+    };
+    const uint8_t *bytes = (const uint8_t *)&response;
+    for (size_t index = 0; index < sizeof(response); index++) {
+        uart_poll_out(upload_uart, bytes[index]);
+    }
+}
+
+static void handle_codex_state_request(void) {
+    struct codex_state_request request = {};
+    if (read_exact(&request, sizeof(request)) < 0 || request.version != CODEX_STATE_VERSION ||
+        request.ttl_ms < CODEX_MIN_TTL_MS || request.ttl_ms > CODEX_MAX_TTL_MS) {
+        send_codex_response(CODEX_BAD_HEADER, request.sequence);
+        return;
+    }
+
+    if (pet_crc32((const uint8_t *)&request, offsetof(struct codex_state_request, crc32)) !=
+        request.crc32) {
+        send_codex_response(CODEX_BAD_CRC, request.sequence);
+        return;
+    }
+    if (merry_codex_state_set(request.state) < 0) {
+        send_codex_response(CODEX_BAD_STATE, request.sequence);
+        return;
+    }
+
+    k_work_reschedule(&codex_expire_work, K_MSEC(request.ttl_ms));
+    send_codex_response(CODEX_OK, request.sequence);
 }
 
 static void send_response(uint16_t sequence, enum upload_status status) {
@@ -250,6 +322,10 @@ static void upload_thread(void *unused1, void *unused2, void *unused3) {
         }
         if (command == STORE_CLEAR_MAGIC) {
             send_store_response(pet_store_clear_uploads() == 0 ? STORE_OK : STORE_CLEAR_FAILED);
+            continue;
+        }
+        if (command == CODEX_STATE_MAGIC) {
+            handle_codex_state_request();
             continue;
         }
 

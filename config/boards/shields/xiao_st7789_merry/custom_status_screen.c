@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -26,6 +27,7 @@
 #include <zmk/split/central.h>
 
 #include "merry_config.h"
+#include "merry_codex_state.h"
 #include "pet_store.h"
 
 #define DISPLAY_NODE DT_CHOSEN(zephyr_display)
@@ -94,6 +96,7 @@ static bool screen_is_on = true;
 static bool pet_mode;
 static bool ui_initialized;
 static atomic_t requested_mode = ATOMIC_INIT(ZMK_ACTIVITY_ACTIVE);
+static atomic_t codex_animation_id = ATOMIC_INIT(MERRY_ANIM_IDLE);
 
 static uint8_t packed_palette_index(uint32_t source_pixel) {
     const uint32_t bit_index = source_pixel * PET_BITS_PER_PIXEL;
@@ -195,7 +198,9 @@ static void pet_timer_callback(lv_timer_t *timer) {
 
 static void refresh_pet_animation(void) {
     struct pet_animation_desc animation;
-    pet_animation_id = ui_config.animation_id;
+    pet_animation_id = ui_config.display_mode == MERRY_DISPLAY_AUTO
+                           ? (uint8_t)atomic_get(&codex_animation_id)
+                           : ui_config.animation_id;
     if (pet_store_get_animation(pet_animation_id, &animation) == 0) {
         pet_animation_count = animation.frame_count;
         pet_animation_loop = (animation.flags & 1u) != 0u;
@@ -209,6 +214,40 @@ static void refresh_pet_animation(void) {
     }
     pet_animation_frame = 0u;
     (void)load_pet_frame(0u);
+}
+
+static void codex_state_apply_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    /* Codex chooses the animation only in adaptive/automatic mode. Keyboard
+     * activity continues to own dashboard, pet, and screen-off transitions.
+     * In particular, a background Codex task never wakes an AFK display.
+     */
+    if (ui_initialized && ui_config.display_mode == MERRY_DISPLAY_AUTO && pet_mode &&
+        screen_is_on) {
+        refresh_pet_animation();
+        if (pet_timer != NULL) {
+            lv_timer_resume(pet_timer);
+        }
+    }
+}
+
+K_WORK_DEFINE(codex_state_apply_work, codex_state_apply_work_callback);
+
+uint8_t merry_codex_state_get(void) {
+    return (uint8_t)atomic_get(&codex_animation_id);
+}
+
+int merry_codex_state_set(uint8_t animation_id) {
+    if (animation_id > MERRY_ANIM_BLOCKED) {
+        return -EINVAL;
+    }
+
+    atomic_val_t previous = atomic_set(&codex_animation_id, animation_id);
+    if ((uint8_t)previous != animation_id && ui_initialized && zmk_display_is_initialized()) {
+        k_work_submit_to_queue(zmk_display_work_q(), &codex_state_apply_work);
+    }
+    return 0;
 }
 
 static void show_dashboard(void) {

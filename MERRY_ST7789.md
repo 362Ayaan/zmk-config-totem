@@ -34,10 +34,10 @@ Keep a particular screen or animation selected:
 ```
 
 Valid modes are `Auto`, `Dashboard`, `Pet`, and `Off`. Valid animations are
-`Idle`, `Running`, `NeedsInput`, `Completed`, and `Blocked`. These are the five
-states intended for a future PC-side Codex bridge. Brightness accepts 0-100,
-the timeout accepts 1-3600 seconds, X accepts -40 to 40, and Y accepts -33 to
-33.
+`Idle`, `Running`, `NeedsInput`, `Completed`, and `Blocked`. In automatic mode
+the live Codex bridge chooses the animation; the configured animation remains
+the manual selection used by `-Mode Pet`. Brightness accepts 0-100, the timeout
+accepts 1-3600 seconds, X accepts -40 to 40, and Y accepts -33 to 33.
 
 Restore the defaults:
 
@@ -108,3 +108,46 @@ Backlight brightness is a persistent but completely reversible runtime setting:
 .\tools\configure_merry.ps1 -Port COM24 -Brightness 85
 .\tools\configure_merry.ps1 -Port COM24 -Brightness 100
 ```
+
+## Codex Desktop bridge
+
+The Windows bridge reads task-status metadata from the running Codex Desktop
+app and sends only a five-state value to the dongle. It does not add another
+USB interface and does not write the state to flash. Start it with automatic
+dongle discovery:
+
+```powershell
+.\tools\merry_codex_bridge.ps1
+```
+
+Specify the port only if automatic discovery is ambiguous:
+
+```powershell
+.\tools\merry_codex_bridge.ps1 -Port COM24
+```
+
+The mapping is `active` to Running, approval or user-input attention to
+NeedsInput, a successful finish to an eight-second Completed pulse, and a
+failed/system-error finish to a twenty-second Blocked pulse. Multiple tasks are
+combined by priority: Blocked, NeedsInput, Running, Completed, then Idle.
+
+The bridge refreshes a 12-second watchdog. If Codex Desktop, the bridge, the
+USB cable, or Windows serial connection disappears, firmware falls back to
+Idle automatically. Codex activity changes only the animation; keyboard
+activity still controls dashboard-to-pet timing and the five-minute AFK screen
+blanking, and a background task never wakes an already blanked display.
+
+Test the PC side without touching the dongle, or test its internal protocol
+logic without connecting to Codex:
+
+```powershell
+.\tools\merry_codex_bridge.ps1 -DryRun -Once
+.\tools\merry_codex_bridge.ps1 -SelfTest
+```
+
+The bridge keeps the COM port open for stable heartbeats. Stop it with Ctrl+C
+before running the pack uploader, configuration tool, or store inspector, then
+start it again afterward. It automatically rediscovers the Codex Desktop pipe
+after an app restart. Because that local app-tools pipe is versioned with the
+desktop app rather than a public cross-version API, rerun `-DryRun -Once` after
+a major Codex Desktop update before relying on unattended startup.
