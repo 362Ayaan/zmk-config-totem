@@ -55,12 +55,17 @@ static void signal_runtime_error(void) {
 }
 
 static int spi_send(const uint8_t *data, size_t length) {
-    /* ST7789 4-wire serial mode 0: change MOSI while SCK is low and sample on
-     * the rising edge. This bypasses Zephyr SPI and nRF pinctrl completely. */
+    /* ZJY-IPS130-V2.0 requires SPI mode 3 (CPOL=1, CPHA=1): SCK idles high,
+     * the leading edge is falling, and the panel samples on the rising edge.
+     * This bypasses Zephyr SPI and nRF pinctrl completely. */
     for (size_t index = 0; index < length; index++) {
         uint8_t value = data[index];
         for (uint8_t bit = 0; bit < 8u; bit++) {
-            int rc = gpio_pin_set(spi_gpio, MOSI_PIN, (value & 0x80u) != 0u);
+            int rc = gpio_pin_set(spi_gpio, SCK_PIN, 0);
+            if (rc < 0) {
+                return rc;
+            }
+            rc = gpio_pin_set(spi_gpio, MOSI_PIN, (value & 0x80u) != 0u);
             if (rc < 0) {
                 return rc;
             }
@@ -70,10 +75,6 @@ static int spi_send(const uint8_t *data, size_t length) {
                 return rc;
             }
             k_busy_wait(SPI_HALF_PERIOD_US);
-            rc = gpio_pin_set(spi_gpio, SCK_PIN, 0);
-            if (rc < 0) {
-                return rc;
-            }
             value <<= 1;
         }
     }
@@ -187,7 +188,7 @@ static void diagnostic_thread(void *unused1, void *unused2, void *unused3) {
     if (gpio_pin_configure(control_gpio, DC_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
         gpio_pin_configure(control_gpio, RESET_PIN, GPIO_OUTPUT_ACTIVE) < 0 ||
         gpio_pin_configure(control_gpio, BACKLIGHT_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
-        gpio_pin_configure(spi_gpio, SCK_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
+        gpio_pin_configure(spi_gpio, SCK_PIN, GPIO_OUTPUT_ACTIVE) < 0 ||
         gpio_pin_configure(spi_gpio, MOSI_PIN, GPIO_OUTPUT_INACTIVE) < 0) {
         return;
     }
