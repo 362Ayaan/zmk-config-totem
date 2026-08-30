@@ -56,7 +56,7 @@ Upload a regenerated animation pack without reflashing ZMK:
 ```
 
 The v2 pack contains 57 frames in nine animations. Each stored 160x174 frame
-uses 5-bit pixel indices. Firmware decodes it directly into one 184x200 RGB565
+uses 5-bit pixel indices. Firmware decodes it directly into one 202x220 RGB565
 render surface, with no second framebuffer and no larger QSPI pack.
 
 The current generator uses one stable 31-color palette per animation to avoid

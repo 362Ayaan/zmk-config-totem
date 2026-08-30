@@ -35,8 +35,8 @@
 #define BATTERY_RIGHT_SLOT 1u
 #define PET_SCREEN_WIDTH 240
 #define PET_SCREEN_HEIGHT 240
-#define PET_RENDER_WIDTH 184u
-#define PET_RENDER_HEIGHT 200u
+#define PET_RENDER_WIDTH 202u
+#define PET_RENDER_HEIGHT 220u
 
 BUILD_ASSERT(CONFIG_LV_Z_MEM_POOL_SIZE >= 16000,
              "Merry requires a 16 KB LVGL object pool");
