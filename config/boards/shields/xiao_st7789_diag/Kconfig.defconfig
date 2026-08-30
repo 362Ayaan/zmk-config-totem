@@ -2,9 +2,6 @@
 
 if SHIELD_XIAO_ST7789_DIAG
 
-config SPI
-    default y
-
 config GPIO
     default y
 

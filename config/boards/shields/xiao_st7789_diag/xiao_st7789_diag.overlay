@@ -1,11 +1,4 @@
 /* SPDX-License-Identifier: MIT */
 
-/ {
-    aliases {
-        merry-diag-spi = &xiao_spi;
-    };
-};
-
-&xiao_spi {
-    status = "okay";
-};
+/* The raw diagnostic intentionally uses GPIO for SCK and MOSI so it does not
+ * depend on the board's SPI peripheral or pinctrl configuration. */

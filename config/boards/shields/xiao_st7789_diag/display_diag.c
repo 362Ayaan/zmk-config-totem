@@ -6,21 +6,22 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/spi.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
 
-#define DIAG_SPI_NODE DT_ALIAS(merry_diag_spi)
-#define DIAG_GPIO_NODE DT_NODELABEL(gpio0)
+#define DIAG_CONTROL_GPIO_NODE DT_NODELABEL(gpio0)
+#define DIAG_SPI_GPIO_NODE DT_NODELABEL(gpio1)
 
-/* Verified XIAO nRF52840 pin mapping: D0=P0.02, D1=P0.03, D2=P0.28. */
+/* Verified XIAO nRF52840 mapping. */
 #define DC_PIN 2u
 #define RESET_PIN 3u
 #define BACKLIGHT_PIN 28u
+#define SCK_PIN 13u  /* D8=P1.13 */
+#define MOSI_PIN 15u /* D10=P1.15 */
 
 #define LCD_WIDTH 240u
 #define LCD_HEIGHT 240u
-#define LCD_SPI_HZ 1000000u
+#define SPI_HALF_PERIOD_US 1u
 
 #define CMD_SWRESET 0x01u
 #define CMD_SLPOUT 0x11u
@@ -33,38 +34,54 @@
 #define CMD_MADCTL 0x36u
 #define CMD_COLMOD 0x3au
 
-BUILD_ASSERT(DT_NODE_HAS_STATUS(DIAG_SPI_NODE, okay), "Diagnostic SPI bus must be enabled");
-BUILD_ASSERT(DT_NODE_HAS_STATUS(DIAG_GPIO_NODE, okay), "Diagnostic GPIO port must be enabled");
+BUILD_ASSERT(DT_NODE_HAS_STATUS(DIAG_CONTROL_GPIO_NODE, okay),
+             "Diagnostic control GPIO port must be enabled");
+BUILD_ASSERT(DT_NODE_HAS_STATUS(DIAG_SPI_GPIO_NODE, okay),
+             "Diagnostic SPI GPIO port must be enabled");
 
-static const struct device *const diag_spi = DEVICE_DT_GET(DIAG_SPI_NODE);
-static const struct device *const diag_gpio = DEVICE_DT_GET(DIAG_GPIO_NODE);
-
-static const struct spi_config spi_config = {
-    .frequency = LCD_SPI_HZ,
-    .operation = SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8),
-    .slave = 0,
-};
+static const struct device *const control_gpio = DEVICE_DT_GET(DIAG_CONTROL_GPIO_NODE);
+static const struct device *const spi_gpio = DEVICE_DT_GET(DIAG_SPI_GPIO_NODE);
 
 static uint8_t line_buffer[LCD_WIDTH * 2u];
 
 static void signal_runtime_error(void) {
-    /* A fast repeating flash means Zephyr rejected an SPI/GPIO operation. */
+    /* A fast repeating flash means Zephyr rejected a GPIO operation. */
     while (true) {
-        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 0);
+        gpio_pin_set(control_gpio, BACKLIGHT_PIN, 0);
         k_sleep(K_MSEC(100));
-        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 1);
+        gpio_pin_set(control_gpio, BACKLIGHT_PIN, 1);
         k_sleep(K_MSEC(100));
     }
 }
 
 static int spi_send(const uint8_t *data, size_t length) {
-    const struct spi_buf buffer = {.buf = (void *)data, .len = length};
-    const struct spi_buf_set buffers = {.buffers = &buffer, .count = 1u};
-    return spi_write(diag_spi, &spi_config, &buffers);
+    /* ST7789 4-wire serial mode 0: change MOSI while SCK is low and sample on
+     * the rising edge. This bypasses Zephyr SPI and nRF pinctrl completely. */
+    for (size_t index = 0; index < length; index++) {
+        uint8_t value = data[index];
+        for (uint8_t bit = 0; bit < 8u; bit++) {
+            int rc = gpio_pin_set(spi_gpio, MOSI_PIN, (value & 0x80u) != 0u);
+            if (rc < 0) {
+                return rc;
+            }
+            k_busy_wait(SPI_HALF_PERIOD_US);
+            rc = gpio_pin_set(spi_gpio, SCK_PIN, 1);
+            if (rc < 0) {
+                return rc;
+            }
+            k_busy_wait(SPI_HALF_PERIOD_US);
+            rc = gpio_pin_set(spi_gpio, SCK_PIN, 0);
+            if (rc < 0) {
+                return rc;
+            }
+            value <<= 1;
+        }
+    }
+    return 0;
 }
 
 static int write_command(uint8_t command, const uint8_t *data, size_t length) {
-    int rc = gpio_pin_set(diag_gpio, DC_PIN, 0);
+    int rc = gpio_pin_set(control_gpio, DC_PIN, 0);
     if (rc < 0) {
         return rc;
     }
@@ -72,18 +89,18 @@ static int write_command(uint8_t command, const uint8_t *data, size_t length) {
     if (rc < 0 || length == 0u) {
         return rc;
     }
-    rc = gpio_pin_set(diag_gpio, DC_PIN, 1);
+    rc = gpio_pin_set(control_gpio, DC_PIN, 1);
     return rc < 0 ? rc : spi_send(data, length);
 }
 
 static int panel_init(void) {
     /* Start with an intentionally generous power-up and reset sequence. */
     k_sleep(K_MSEC(200));
-    gpio_pin_set(diag_gpio, RESET_PIN, 1);
+    gpio_pin_set(control_gpio, RESET_PIN, 1);
     k_sleep(K_MSEC(20));
-    gpio_pin_set(diag_gpio, RESET_PIN, 0);
+    gpio_pin_set(control_gpio, RESET_PIN, 0);
     k_sleep(K_MSEC(20));
-    gpio_pin_set(diag_gpio, RESET_PIN, 1);
+    gpio_pin_set(control_gpio, RESET_PIN, 1);
     k_sleep(K_MSEC(150));
 
     int rc = write_command(CMD_SWRESET, NULL, 0u);
@@ -145,7 +162,7 @@ static int fill_screen(uint16_t rgb565) {
     if (rc < 0) {
         return rc;
     }
-    rc = gpio_pin_set(diag_gpio, DC_PIN, 1);
+    rc = gpio_pin_set(control_gpio, DC_PIN, 1);
     if (rc < 0) {
         return rc;
     }
@@ -163,24 +180,26 @@ static void diagnostic_thread(void *unused1, void *unused2, void *unused3) {
     ARG_UNUSED(unused2);
     ARG_UNUSED(unused3);
 
-    if (!device_is_ready(diag_spi) || !device_is_ready(diag_gpio)) {
+    if (!device_is_ready(control_gpio) || !device_is_ready(spi_gpio)) {
         return;
     }
 
-    if (gpio_pin_configure(diag_gpio, DC_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
-        gpio_pin_configure(diag_gpio, RESET_PIN, GPIO_OUTPUT_ACTIVE) < 0 ||
-        gpio_pin_configure(diag_gpio, BACKLIGHT_PIN, GPIO_OUTPUT_INACTIVE) < 0) {
+    if (gpio_pin_configure(control_gpio, DC_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
+        gpio_pin_configure(control_gpio, RESET_PIN, GPIO_OUTPUT_ACTIVE) < 0 ||
+        gpio_pin_configure(control_gpio, BACKLIGHT_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
+        gpio_pin_configure(spi_gpio, SCK_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
+        gpio_pin_configure(spi_gpio, MOSI_PIN, GPIO_OUTPUT_INACTIVE) < 0) {
         return;
     }
 
     /* Three visible backlight flashes identify this diagnostic firmware. */
     for (uint8_t flash = 0; flash < 3u; flash++) {
-        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 1);
+        gpio_pin_set(control_gpio, BACKLIGHT_PIN, 1);
         k_sleep(K_MSEC(250));
-        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 0);
+        gpio_pin_set(control_gpio, BACKLIGHT_PIN, 0);
         k_sleep(K_MSEC(250));
     }
-    gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 1);
+    gpio_pin_set(control_gpio, BACKLIGHT_PIN, 1);
 
     if (panel_init() < 0) {
         signal_runtime_error();
