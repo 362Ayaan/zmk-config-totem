@@ -127,7 +127,7 @@ Specify the port only if automatic discovery is ambiguous:
 ```
 
 The mapping is `active` to Running, approval or user-input attention to
-NeedsInput, a successful finish to an eight-second Completed pulse, and a
+NeedsInput, a successful finish to a thirty-second Completed pulse, and a
 failed/system-error finish to a twenty-second Blocked pulse. Multiple tasks are
 combined by priority: Blocked, NeedsInput, Running, Completed, then Idle.
 

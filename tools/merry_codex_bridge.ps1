@@ -10,7 +10,7 @@ param(
     [int]$TtlSeconds = 12,
 
     [ValidateRange(1, 60)]
-    [int]$CompletedSeconds = 8,
+    [int]$CompletedSeconds = 30,
 
     [ValidateRange(1, 120)]
     [int]$FailureSeconds = 20,
