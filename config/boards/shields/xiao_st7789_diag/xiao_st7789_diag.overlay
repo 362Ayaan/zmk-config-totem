@@ -8,9 +8,13 @@
     };
 
     merry_diag: merry-diag {
-        dc-gpios = <&xiao_d 0 GPIO_ACTIVE_HIGH>;
-        reset-gpios = <&xiao_d 1 GPIO_ACTIVE_HIGH>;
-        backlight-gpios = <&xiao_d 2 GPIO_ACTIVE_HIGH>;
+        /* Use the connector's resolved nRF GPIOs directly. xiao_d is a
+         * gpio-map connector rather than a runtime GPIO controller, so a
+         * custom unbound diagnostic node cannot pass it to DEVICE_DT_GET().
+         */
+        dc-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;        /* XIAO D0 */
+        reset-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;     /* XIAO D1 */
+        backlight-gpios = <&gpio0 28 GPIO_ACTIVE_HIGH>; /* XIAO D2 */
     };
 };
 
