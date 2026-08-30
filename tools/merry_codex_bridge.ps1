@@ -287,7 +287,7 @@ function Invoke-DongleState {
 
 function Connect-Dongle {
     Disconnect-Dongle
-    $candidates = Get-DongleCandidates
+    $candidates = @(Get-DongleCandidates)
     if ($candidates.Count -eq 0) {
         throw 'No ZMK USB serial dongle was found. Connect it or pass -Port COMxx.'
     }
