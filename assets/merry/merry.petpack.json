@@ -8,14 +8,24 @@
   "frame_count": 57,
   "animation_count": 9,
   "palette_colors_per_frame": 31,
+  "palette_scope": "animation",
+  "anchor_colors": [
+    "#16c7ff",
+    "#087dd1",
+    "#42ce72",
+    "#147e48",
+    "#f4eee4",
+    "#211124"
+  ],
   "quantization_distance": "redmean-perceptual",
-  "saturation": 1.14,
-  "blue_green_boost": 1.06,
+  "saturation": 1.18,
+  "blue_green_boost": 1.12,
+  "resampling": "box-sharp",
   "bits_per_pixel": 5,
   "packed_bytes_per_frame": 17400,
   "pack_bytes": 996016,
-  "pack_crc32": "1fe8832e",
-  "content_crc32": "6a066d23",
+  "pack_crc32": "2f91df64",
+  "content_crc32": "dc5ddbc6",
   "animations": [
     {
       "id": 0,

@@ -10,10 +10,10 @@ dongle display.
 - Pack: 57 frames / 9 animations / 996,016 bytes
 
 The converter discards RGB values hidden below fully transparent source pixels;
-those pixels are black/transparent in the dongle pack. It applies a restrained
-display-oriented color lift before RGB565 conversion and uses perceptually
-weighted palette matching. `qa/contact-sheet.png` is the deterministic visual
-check of every converted frame.
+those pixels are black/transparent in the dongle pack. It uses a stable palette
+per animation, explicit cyan/blue/green/white/plum anchors, a sharpened box
+downsample, and perceptually weighted palette matching. `qa/contact-sheet.png`
+is the deterministic visual check of every converted frame.
 
 The source page describes this as a community-submitted asset and does not grant
 rights to third-party characters. Keep the credit above and assess the rights

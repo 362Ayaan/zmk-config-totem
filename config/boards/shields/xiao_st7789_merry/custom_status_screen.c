@@ -35,11 +35,15 @@
 #define BATTERY_RIGHT_SLOT 1u
 #define PET_SCREEN_WIDTH 240
 #define PET_SCREEN_HEIGHT 240
+#define PET_RENDER_WIDTH 184u
+#define PET_RENDER_HEIGHT 200u
 
 BUILD_ASSERT(CONFIG_LV_Z_MEM_POOL_SIZE >= 16000,
              "Merry requires a 16 KB LVGL object pool");
 BUILD_ASSERT(CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS >= 3,
              "Merry's L/D/R battery row requires three split peripherals");
+BUILD_ASSERT(PET_RENDER_WIDTH <= PET_SCREEN_WIDTH && PET_RENDER_HEIGHT <= PET_SCREEN_HEIGHT,
+             "Merry render surface must fit the panel");
 
 static const struct device *const display = DEVICE_DT_GET(DISPLAY_NODE);
 static const struct device *const backlight = DEVICE_DT_GET(DT_PARENT(BACKLIGHT_NODE));
@@ -63,15 +67,19 @@ static lv_style_t modifier_style;
 static lv_style_t rule_style;
 
 static uint8_t packed_frame[PET_FRAME_PACKED_BYTES];
-static uint16_t decoded_frame[PET_FRAME_WIDTH * PET_FRAME_HEIGHT];
+/* The QSPI pack remains at 160x174. Decode directly into a larger nearest-
+ * neighbour surface so changing visual size does not grow or invalidate the
+ * atomic pet pack and does not require a second source framebuffer.
+ */
+static uint16_t decoded_frame[PET_RENDER_WIDTH * PET_RENDER_HEIGHT];
 static lv_image_dsc_t pet_image_descriptor = {
     .header =
         {
             .magic = LV_IMAGE_HEADER_MAGIC,
             .cf = LV_COLOR_FORMAT_RGB565,
-            .w = PET_FRAME_WIDTH,
-            .h = PET_FRAME_HEIGHT,
-            .stride = PET_FRAME_WIDTH * sizeof(uint16_t),
+            .w = PET_RENDER_WIDTH,
+            .h = PET_RENDER_HEIGHT,
+            .stride = PET_RENDER_WIDTH * sizeof(uint16_t),
         },
     .data_size = sizeof(decoded_frame),
     .data = (const uint8_t *)decoded_frame,
@@ -86,6 +94,17 @@ static bool screen_is_on = true;
 static bool pet_mode;
 static bool ui_initialized;
 static atomic_t requested_mode = ATOMIC_INIT(ZMK_ACTIVITY_ACTIVE);
+
+static uint8_t packed_palette_index(uint32_t source_pixel) {
+    const uint32_t bit_index = source_pixel * PET_BITS_PER_PIXEL;
+    const size_t byte_index = bit_index >> 3;
+    const uint8_t bit_shift = bit_index & 7u;
+    uint16_t value = packed_frame[byte_index];
+    if (bit_shift > 3u) {
+        value |= (uint16_t)packed_frame[byte_index + 1u] << 8;
+    }
+    return (value >> bit_shift) & (PET_PALETTE_SIZE - 1u);
+}
 
 static void set_hidden(lv_obj_t *object, bool hidden) {
     if (hidden) {
@@ -133,18 +152,16 @@ static int load_pet_frame(uint16_t animation_frame) {
         return rc;
     }
 
-    size_t packed_offset = 0u;
-    uint32_t bit_buffer = 0u;
-    uint8_t buffered_bits = 0u;
-    for (size_t pixel = 0; pixel < ARRAY_SIZE(decoded_frame); pixel++) {
-        while (buffered_bits < PET_BITS_PER_PIXEL) {
-            bit_buffer |= (uint32_t)packed_frame[packed_offset++] << buffered_bits;
-            buffered_bits += 8u;
+    for (uint32_t y = 0u; y < PET_RENDER_HEIGHT; y++) {
+        const uint32_t source_y =
+            ((2u * y + 1u) * PET_FRAME_HEIGHT) / (2u * PET_RENDER_HEIGHT);
+        for (uint32_t x = 0u; x < PET_RENDER_WIDTH; x++) {
+            const uint32_t source_x =
+                ((2u * x + 1u) * PET_FRAME_WIDTH) / (2u * PET_RENDER_WIDTH);
+            const uint32_t source_pixel = source_y * PET_FRAME_WIDTH + source_x;
+            const uint8_t palette_index = packed_palette_index(source_pixel);
+            decoded_frame[y * PET_RENDER_WIDTH + x] = frame.palette[palette_index];
         }
-        const uint8_t palette_index = bit_buffer & (PET_PALETTE_SIZE - 1u);
-        bit_buffer >>= PET_BITS_PER_PIXEL;
-        buffered_bits -= PET_BITS_PER_PIXEL;
-        decoded_frame[pixel] = frame.palette[palette_index];
     }
 
     lv_obj_invalidate(pet_image);

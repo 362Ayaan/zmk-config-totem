@@ -2,8 +2,9 @@
 """Convert a Codex v1 pet atlas into the compact dongle pet-pack format.
 
 The input atlas is 8 columns by 9 rows of 192x208 RGBA cells. Each output
-frame is 160x174 pixels with a private 31-colour RGB565 palette; palette index
-zero is transparent/black. Indices are packed as a continuous 5-bit stream.
+frame is 160x174 pixels with a stable 31-colour RGB565 palette per animation;
+palette index zero is transparent/black. Indices are packed as a continuous
+5-bit stream.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 
 ATLAS_COLUMNS = 8
@@ -26,14 +27,24 @@ CELL_HEIGHT = 208
 FRAME_WIDTH = 160
 FRAME_HEIGHT = 174
 ALPHA_THRESHOLD = 32
-DEFAULT_SATURATION = 1.14
-DEFAULT_COOL_BOOST = 1.06
+DEFAULT_SATURATION = 1.18
+DEFAULT_COOL_BOOST = 1.12
+DEFAULT_RESAMPLING = "box-sharp"
 
 PACK_MAGIC = 0x31544550  # PET1 in little endian
 PACK_VERSION = 2
 BITS_PER_PIXEL = 5
 PALETTE_SIZE = 1 << BITS_PER_PIXEL
 VISIBLE_COLORS = PALETTE_SIZE - 1
+ANCHOR_COLORS = (
+    (22, 199, 255),  # bright cyan water/highlight
+    (8, 125, 209),   # saturated mid-blue water/shadow
+    (66, 206, 114),  # emerald foliage
+    (20, 126, 72),   # deep green foliage/shadow
+    (244, 238, 228), # warm off-white sails/body
+    (33, 17, 36),    # dark plum outline that remains distinct from black
+)
+ADAPTIVE_COLORS = VISIBLE_COLORS - len(ANCHOR_COLORS)
 PACK_HEADER = struct.Struct("<IHHHHHHIIIIII")
 ANIMATION_DESC = struct.Struct("<BBHHH")
 FRAME_DESC = struct.Struct(f"<IHH{PALETTE_SIZE}H")
@@ -60,6 +71,11 @@ ANIMATIONS = (
 )
 
 
+def image_pixels(image: Image.Image) -> list[tuple[int, ...]]:
+    getter = getattr(image, "get_flattened_data", image.getdata)
+    return list(getter())
+
+
 def rgb888_to_rgb565(rgb: tuple[int, int, int]) -> int:
     r, g, b = rgb
     return ((r * 31 + 127) // 255 << 11) | ((g * 63 + 127) // 255 << 5) | (
@@ -74,11 +90,6 @@ def rgb565_to_rgb888(value: int) -> tuple[int, int, int]:
     return ((r * 255 + 15) // 31, (g * 255 + 31) // 63, (b * 255 + 15) // 31)
 
 
-def composite_on_black(pixel: tuple[int, int, int, int]) -> tuple[int, int, int]:
-    r, g, b, a = pixel
-    return ((r * a + 127) // 255, (g * a + 127) // 255, (b * a + 127) // 255)
-
-
 def enhance_pixel(
     pixel: tuple[int, int, int, int], saturation: float, cool_boost: float
 ) -> tuple[int, int, int]:
@@ -90,9 +101,17 @@ def enhance_pixel(
     r, g, b, a = pixel
     hue, sat, value = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
     sat = min(1.0, sat * saturation)
-    if 0.25 <= hue <= 0.67 and sat > 0.18:
-        sat = min(1.0, sat * cool_boost)
-        value = min(1.0, value * cool_boost)
+    if 0.20 <= hue < 0.48 and sat > 0.18:
+        # Pull muted olive foliage gently toward emerald, while retaining
+        # light/dark structure for the two dedicated green anchors.
+        hue = hue * 0.72 + 0.38 * 0.28
+        sat = min(1.0, max(0.68, sat * cool_boost))
+        value = min(1.0, value * (1.0 + (cool_boost - 1.0) * 1.5))
+    elif 0.48 <= hue <= 0.72 and sat > 0.18:
+        # Water benefits from a higher saturation floor on an illuminated IPS
+        # panel, where dark cyan otherwise reads as grey at full backlight.
+        sat = min(1.0, max(0.76, sat * cool_boost))
+        value = min(1.0, value * (1.0 + (cool_boost - 1.0) * 1.35))
     boosted = colorsys.hsv_to_rgb(hue, sat, value)
     return tuple((round(channel * 255) * a + 127) // 255 for channel in boosted)
 
@@ -108,34 +127,67 @@ def perceptual_distance(left: tuple[int, int, int], right: tuple[int, int, int])
     )
 
 
-def quantize_frame(
-    frame: Image.Image, saturation: float, cool_boost: float
-) -> tuple[list[int], bytes, Image.Image]:
-    rgba = frame.convert("RGBA")
-    pixels = list(rgba.getdata())
+def resize_frame(frame: Image.Image, resampling: str) -> Image.Image:
+    if resampling == "nearest":
+        return frame.resize((FRAME_WIDTH, FRAME_HEIGHT), Image.Resampling.NEAREST)
+    resized = frame.resize((FRAME_WIDTH, FRAME_HEIGHT), Image.Resampling.BOX)
+    alpha = resized.getchannel("A")
+    sharpened = resized.convert("RGB").filter(
+        ImageFilter.UnsharpMask(radius=0.65, percent=65, threshold=3)
+    ).convert("RGBA")
+    sharpened.putalpha(alpha)
+    return sharpened
+
+
+def build_animation_palette(
+    frames: list[Image.Image], saturation: float, cool_boost: float
+) -> list[int]:
+    visible = []
+    for frame in frames:
+        visible.extend(
+            enhance_pixel(px, saturation, cool_boost)
+            for px in image_pixels(frame.convert("RGBA"))
+            if px[3] >= ALPHA_THRESHOLD
+        )
     visible = [
-        enhance_pixel(px, saturation, cool_boost)
-        for px in pixels
-        if px[3] >= ALPHA_THRESHOLD
+        color for color in visible if max(color) >= 4
     ]
     if not visible:
-        raise ValueError("frame is empty")
+        raise ValueError("animation is empty")
 
     sample = Image.new("RGB", (len(visible), 1))
     sample.putdata(visible)
     quantized = sample.quantize(
-        colors=VISIBLE_COLORS, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE
+        colors=ADAPTIVE_COLORS, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE
     )
     raw_palette = quantized.getpalette() or []
     used_indices = sorted(index for _, index in (quantized.getcolors() or []))
-    palette_rgb = [
+    adaptive_rgb = [
         tuple(raw_palette[index * 3 : index * 3 + 3])  # type: ignore[arg-type]
-        for index in used_indices[:VISIBLE_COLORS]
+        for index in used_indices[:ADAPTIVE_COLORS]
     ]
-    while len(palette_rgb) < VISIBLE_COLORS:
-        palette_rgb.append((0, 0, 0))
 
-    palette565 = [0] + [rgb888_to_rgb565(color) for color in palette_rgb]
+    # Put the anchor colors first, then deduplicate after RGB565 conversion.
+    # Repeating the last valid entry for unused slots avoids creating opaque
+    # black candidates that could erase dark-but-visible outline pixels.
+    visible_palette565: list[int] = []
+    for color in (*ANCHOR_COLORS, *adaptive_rgb):
+        encoded = rgb888_to_rgb565(color)
+        if encoded != 0 and encoded not in visible_palette565:
+            visible_palette565.append(encoded)
+    while len(visible_palette565) < VISIBLE_COLORS:
+        visible_palette565.append(visible_palette565[-1])
+    return [0] + visible_palette565[:VISIBLE_COLORS]
+
+
+def quantize_frame(
+    frame: Image.Image,
+    palette565: list[int],
+    saturation: float,
+    cool_boost: float,
+) -> tuple[list[int], bytes, Image.Image]:
+    rgba = frame.convert("RGBA")
+    pixels = image_pixels(rgba)
     palette_display = [rgb565_to_rgb888(value) for value in palette565]
     nearest_cache: dict[tuple[int, int, int], int] = {}
     indices: list[int] = []
@@ -219,6 +271,7 @@ def build_pack(
     output_dir: Path,
     saturation: float = DEFAULT_SATURATION,
     cool_boost: float = DEFAULT_COOL_BOOST,
+    resampling: str = DEFAULT_RESAMPLING,
 ) -> dict[str, object]:
     atlas = Image.open(atlas_path).convert("RGBA")
     if atlas.size != (ATLAS_COLUMNS * CELL_WIDTH, ATLAS_ROWS * CELL_HEIGHT):
@@ -235,16 +288,25 @@ def build_pack(
     for animation_id, animation in enumerate(ANIMATIONS):
         animation_records.append((animation_id, 1 if animation.loop else 0, first_frame, animation.count, 0))
         gif_frames: list[Image.Image] = []
+        source_frames = [
+            resize_frame(
+                atlas.crop(
+                    (
+                        column * CELL_WIDTH,
+                        animation_id * CELL_HEIGHT,
+                        (column + 1) * CELL_WIDTH,
+                        (animation_id + 1) * CELL_HEIGHT,
+                    )
+                ),
+                resampling,
+            )
+            for column in range(animation.count)
+        ]
+        animation_palette = build_animation_palette(source_frames, saturation, cool_boost)
         for column in range(animation.count):
-            cell = atlas.crop(
-                (
-                    column * CELL_WIDTH,
-                    animation_id * CELL_HEIGHT,
-                    (column + 1) * CELL_WIDTH,
-                    (animation_id + 1) * CELL_HEIGHT,
-                )
-            ).resize((FRAME_WIDTH, FRAME_HEIGHT), Image.Resampling.NEAREST)
-            palette, pixels, preview = quantize_frame(cell, saturation, cool_boost)
+            palette, pixels, preview = quantize_frame(
+                source_frames[column], animation_palette, saturation, cool_boost
+            )
             duration = animation.durations_ms[column]
             frame_records.append((0, duration, palette, pixels, preview, animation.name, column))
             gif_frames.append(preview)
@@ -320,9 +382,12 @@ def build_pack(
         "frame_count": len(frame_records),
         "animation_count": len(animation_records),
         "palette_colors_per_frame": VISIBLE_COLORS,
+        "palette_scope": "animation",
+        "anchor_colors": ["#{:02x}{:02x}{:02x}".format(*color) for color in ANCHOR_COLORS],
         "quantization_distance": "redmean-perceptual",
         "saturation": saturation,
         "blue_green_boost": cool_boost,
+        "resampling": resampling,
         "bits_per_pixel": BITS_PER_PIXEL,
         "packed_bytes_per_frame": frame_size,
         "pack_bytes": len(pack),
@@ -349,12 +414,17 @@ def main() -> None:
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--saturation", type=float, default=DEFAULT_SATURATION)
     parser.add_argument("--cool-boost", type=float, default=DEFAULT_COOL_BOOST)
+    parser.add_argument(
+        "--resampling", choices=("nearest", "box-sharp"), default=DEFAULT_RESAMPLING
+    )
     args = parser.parse_args()
     if not 1.0 <= args.saturation <= 1.5:
         parser.error("--saturation must be between 1.0 and 1.5")
     if not 1.0 <= args.cool_boost <= 1.25:
         parser.error("--cool-boost must be between 1.0 and 1.25")
-    manifest = build_pack(args.atlas, args.output_dir, args.saturation, args.cool_boost)
+    manifest = build_pack(
+        args.atlas, args.output_dir, args.saturation, args.cool_boost, args.resampling
+    )
     print(json.dumps(manifest, indent=2))
 
 
