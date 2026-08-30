@@ -1,0 +1,5 @@
+file_format: "1"
+id: xiao_st7789_diag
+name: XIAO ST7789 Electrical Diagnostic
+type: shield
+requires: [seeed_xiao]

@@ -10,6 +10,13 @@ include:
     shield: totem_dongle xiao_st7789_merry
     artifact-name: dongle-st7789-merry
 
+  # Raw electrical/panel diagnostic: three backlight flashes, then direct
+  # 1 MHz SPI full-screen red/green/blue/white/black cycling. This bypasses
+  # LVGL, the Zephyr display driver, QSPI, and pet animation code.
+  - board: xiao_ble//zmk
+    shield: totem_dongle xiao_st7789_diag
+    artifact-name: dongle-st7789-diagnostic
+
   # Keyboard halves become BLE peripherals only after the dongle is ready.
   - board: xiao_ble//zmk
     shield: totem_left

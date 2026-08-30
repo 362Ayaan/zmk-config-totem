@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: MIT */
+
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+    aliases {
+        merry-diag-spi = &xiao_spi;
+    };
+
+    merry_diag: merry-diag {
+        dc-gpios = <&xiao_d 0 GPIO_ACTIVE_HIGH>;
+        reset-gpios = <&xiao_d 1 GPIO_ACTIVE_HIGH>;
+        backlight-gpios = <&xiao_d 2 GPIO_ACTIVE_HIGH>;
+    };
+};
+
+&xiao_spi {
+    status = "okay";
+};
