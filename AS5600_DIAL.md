@@ -21,7 +21,7 @@ SCL to D3. If a build reports no device at `0x36`, check this wiring first.
 | GND | GND |
 | SDA | D4 |
 | SCL | D3 |
-| DIR | leave open |
+| DIR | GND (do not leave floating) |
 | OUT | leave open |
 
 Use 3.3 V, not 5 V. Many AS5600 breakout boards pull SDA and SCL up to VCC, so
@@ -41,8 +41,10 @@ which spans 0-128 at 3.3 V; the useful target is 30-90. The hand-held test read
 38, which is good, but re-check it after the magnet is clamped in the printed
 case because the final gap can change it.
 
-If a stationary angle appears to drift at roughly 50 Hz, read AGC first. Treat
-that as a magnet gap/alignment symptom, not an electrical I2C symptom.
+If a stationary angle alternates between two complementary values that sum to
+4095, verify that DIR is firmly tied to GND. A floating DIR pin can pick up
+mains noise and repeatedly reverse the reported angle even when AGC and magnet
+alignment are healthy.
 
 Multi-turn position is accumulated by firmware from consecutive 12-bit angle
 samples. That accumulated turn count is lost on reset; an application that
