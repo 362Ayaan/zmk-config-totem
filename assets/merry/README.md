@@ -21,10 +21,11 @@ needed before redistributing the art or firmware bundle.
 
 `dongle-st7789-diagnostic.uf2` is a temporary hardware-isolation image. It uses
 the same D0/D1/D2/D8/D10 wiring as the Merry target, but bypasses LVGL, the
-Zephyr ST7789 driver, QSPI storage, and pet code. On boot it flashes the
-backlight three times, performs a conservative reset and standard ST7789 RGB565
-initialization at 1 MHz, then cycles the full panel through red, green, blue,
-white, and black. Reflash `dongle-st7789-merry.uf2` after the test.
+Zephyr ST7789/SPI drivers, QSPI storage, and pet code. On boot it flashes the
+backlight three times, performs a conservative reset, and drives the
+ZJY-IPS130-V2.0 directly with GPIO-generated SPI mode 3 before cycling the full
+panel through red, green, blue, white, and black. Reflash
+`dongle-st7789-merry.uf2` after the test.
 
 ## Updating without reflashing ZMK
 
