@@ -6,8 +6,8 @@ dongle display.
 - Source reference: <https://codex-pets.net/#/pets/merry>
 - Pet credit: **Merry by jeansolopreneur**
 - Source format: Codex Pets v1 atlas, 1536x1872, 8 columns by 9 animation rows
-- Dongle format: 160x174, 4 bits per pixel, private 15-colour RGB565 palette per frame
-- Pack: 57 frames / 9 animations / 795,832 bytes
+- Dongle format: 160x174, 5 bits per pixel, private 31-colour RGB565 palette per frame
+- Pack: 57 frames / 9 animations / 996,016 bytes
 
 The converter discards RGB values hidden below fully transparent source pixels;
 those pixels are black/transparent in the dongle pack. `qa/contact-sheet.png`

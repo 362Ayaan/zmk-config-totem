@@ -8,11 +8,13 @@
 #include <zephyr/toolchain.h>
 
 #define PET_PACK_MAGIC 0x31544550u /* PET1 */
-#define PET_PACK_VERSION 1u
+#define PET_PACK_VERSION 2u
 #define PET_FRAME_WIDTH 160u
 #define PET_FRAME_HEIGHT 174u
-#define PET_FRAME_PACKED_BYTES ((PET_FRAME_WIDTH * PET_FRAME_HEIGHT) / 2u)
-#define PET_PALETTE_SIZE 16u
+#define PET_BITS_PER_PIXEL 5u
+#define PET_FRAME_PACKED_BYTES                                                                  \
+    ((PET_FRAME_WIDTH * PET_FRAME_HEIGHT * PET_BITS_PER_PIXEL + 7u) / 8u)
+#define PET_PALETTE_SIZE (1u << PET_BITS_PER_PIXEL)
 #define PET_MAX_ANIMATIONS 16u
 #define PET_MAX_FRAMES 128u
 
@@ -63,4 +65,3 @@ struct pet_frame {
     uint16_t duration_ms;
     uint16_t palette[PET_PALETTE_SIZE];
 };
-

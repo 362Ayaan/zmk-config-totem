@@ -5,7 +5,7 @@
 
 #define MERRY_FALLBACK_WIDTH 160
 #define MERRY_FALLBACK_HEIGHT 174
-#define MERRY_FALLBACK_DATA_SIZE 13920
+#define MERRY_FALLBACK_DATA_SIZE 17400
 
-extern const uint16_t merry_fallback_palette[16];
+extern const uint16_t merry_fallback_palette[32];
 extern const uint8_t merry_fallback_pixels[MERRY_FALLBACK_DATA_SIZE];

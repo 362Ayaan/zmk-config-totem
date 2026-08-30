@@ -128,10 +128,18 @@ static int load_pet_frame(uint16_t animation_frame) {
         return rc;
     }
 
-    for (size_t pair = 0; pair < ARRAY_SIZE(packed_frame); pair++) {
-        const uint8_t packed = packed_frame[pair];
-        decoded_frame[pair * 2u] = frame.palette[(packed >> 4) & 0x0fu];
-        decoded_frame[pair * 2u + 1u] = frame.palette[packed & 0x0fu];
+    size_t packed_offset = 0u;
+    uint32_t bit_buffer = 0u;
+    uint8_t buffered_bits = 0u;
+    for (size_t pixel = 0; pixel < ARRAY_SIZE(decoded_frame); pixel++) {
+        while (buffered_bits < PET_BITS_PER_PIXEL) {
+            bit_buffer |= (uint32_t)packed_frame[packed_offset++] << buffered_bits;
+            buffered_bits += 8u;
+        }
+        const uint8_t palette_index = bit_buffer & (PET_PALETTE_SIZE - 1u);
+        bit_buffer >>= PET_BITS_PER_PIXEL;
+        buffered_bits -= PET_BITS_PER_PIXEL;
+        decoded_frame[pixel] = frame.palette[palette_index];
     }
 
     lv_obj_invalidate(pet_image);
@@ -310,7 +318,7 @@ static void modifier_update_work_callback(struct k_work *work) {
     if ((mods & (MOD_LSFT | MOD_RSFT)) != 0u) {
         strcat(text, text[0] == '\0' ? "SHIFT" : "  SHIFT");
     }
-    lv_label_set_text(dashboard_modifiers, text[0] == '\0' ? "-" : text);
+    lv_label_set_text(dashboard_modifiers, text);
     lv_obj_align(dashboard_modifiers, LV_ALIGN_BOTTOM_MID, 0, -13);
 }
 
@@ -329,7 +337,10 @@ ZMK_SUBSCRIPTION(merry_modifiers, zmk_keycode_state_changed);
 
 static void init_styles(void) {
     lv_style_init(&screen_style);
-    lv_style_set_bg_color(&screen_style, lv_color_hex(0x09090d));
+    /* Pet transparency is encoded as RGB565 black, so a true-black screen
+     * background makes the sprite boundary disappear without an alpha buffer.
+     */
+    lv_style_set_bg_color(&screen_style, lv_color_hex(0x000000));
     lv_style_set_bg_opa(&screen_style, LV_OPA_COVER);
     lv_style_set_border_width(&screen_style, 0);
     lv_style_set_pad_all(&screen_style, 0);
