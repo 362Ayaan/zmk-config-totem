@@ -11,10 +11,10 @@ from pathlib import Path
 
 
 PACK_MAGIC = 0x31544550
-PACK_VERSION = 2
-FRAME_WIDTH = 160
-FRAME_HEIGHT = 174
-BITS_PER_PIXEL = 5
+PACK_VERSION = 3
+FRAME_WIDTH = 192
+FRAME_HEIGHT = 208
+BITS_PER_PIXEL = 6
 PALETTE_SIZE = 1 << BITS_PER_PIXEL
 SLOT_PAYLOAD_BYTES = 1024 * 1024 - 4096
 
@@ -80,7 +80,7 @@ def validate(pack_path: Path, manifest_path: Path) -> None:
         if not 20 <= duration_ms <= 10_000 or frame_reserved != 0 or palette[0] != 0:
             raise ValueError(f"frame {index} duration, reserved field, or transparent color is invalid")
 
-        # Mirror the firmware's streaming 5-bit decoder to prove the pack can
+        # Mirror the firmware's streaming 6-bit decoder to prove the pack can
         # be consumed without an overread and contains both transparent and
         # visible pixels.
         packed = pack[pixel_offset : pixel_offset + FRAME_BYTES]

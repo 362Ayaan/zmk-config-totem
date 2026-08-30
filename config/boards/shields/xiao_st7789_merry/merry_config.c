@@ -45,7 +45,7 @@ K_MUTEX_DEFINE(config_mutex);
 bool merry_config_is_valid(const struct merry_config *config) {
     return config != NULL && config->version == MERRY_CONFIG_VERSION &&
            config->display_mode <= MERRY_DISPLAY_OFF &&
-           config->animation_id <= MERRY_ANIM_REVIEW && config->brightness <= 100u &&
+           config->animation_id <= MERRY_ANIM_BLOCKED && config->brightness <= 100u &&
            config->idle_timeout_ms >= MERRY_CONFIG_MIN_TIMEOUT_MS &&
            config->idle_timeout_ms <= MERRY_CONFIG_MAX_TIMEOUT_MS &&
            config->pet_x >= MERRY_CONFIG_MIN_X && config->pet_x <= MERRY_CONFIG_MAX_X &&

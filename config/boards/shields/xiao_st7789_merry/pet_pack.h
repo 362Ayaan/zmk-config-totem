@@ -8,10 +8,10 @@
 #include <zephyr/toolchain.h>
 
 #define PET_PACK_MAGIC 0x31544550u /* PET1 */
-#define PET_PACK_VERSION 2u
-#define PET_FRAME_WIDTH 160u
-#define PET_FRAME_HEIGHT 174u
-#define PET_BITS_PER_PIXEL 5u
+#define PET_PACK_VERSION 3u
+#define PET_FRAME_WIDTH 192u
+#define PET_FRAME_HEIGHT 208u
+#define PET_BITS_PER_PIXEL 6u
 #define PET_FRAME_PACKED_BYTES                                                                  \
     ((PET_FRAME_WIDTH * PET_FRAME_HEIGHT * PET_BITS_PER_PIXEL + 7u) / 8u)
 #define PET_PALETTE_SIZE (1u << PET_BITS_PER_PIXEL)
@@ -20,14 +20,10 @@
 
 enum merry_animation_id {
     MERRY_ANIM_IDLE = 0,
-    MERRY_ANIM_RUNNING_RIGHT,
-    MERRY_ANIM_RUNNING_LEFT,
-    MERRY_ANIM_WAVING,
-    MERRY_ANIM_JUMPING,
-    MERRY_ANIM_FAILED,
-    MERRY_ANIM_WAITING,
     MERRY_ANIM_RUNNING,
-    MERRY_ANIM_REVIEW,
+    MERRY_ANIM_NEEDS_INPUT,
+    MERRY_ANIM_COMPLETED,
+    MERRY_ANIM_BLOCKED,
 };
 
 struct pet_pack_header {

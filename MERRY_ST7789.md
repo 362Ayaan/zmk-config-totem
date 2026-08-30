@@ -29,14 +29,15 @@ Keep a particular screen or animation selected:
 
 ```powershell
 .\tools\configure_merry.ps1 -Port COM24 -Mode Dashboard
-.\tools\configure_merry.ps1 -Port COM24 -Mode Pet -Animation Waving
+.\tools\configure_merry.ps1 -Port COM24 -Mode Pet -Animation Completed
 .\tools\configure_merry.ps1 -Port COM24 -Mode Off
 ```
 
 Valid modes are `Auto`, `Dashboard`, `Pet`, and `Off`. Valid animations are
-`Idle`, `RunningRight`, `RunningLeft`, `Waving`, `Jumping`, `Failed`, `Waiting`,
-`Running`, and `Review`. Brightness accepts 0-100, the timeout accepts 1-3600
-seconds, X accepts -40 to 40, and Y accepts -33 to 33.
+`Idle`, `Running`, `NeedsInput`, `Completed`, and `Blocked`. These are the five
+states intended for a future PC-side Codex bridge. Brightness accepts 0-100,
+the timeout accepts 1-3600 seconds, X accepts -40 to 40, and Y accepts -33 to
+33.
 
 Restore the defaults:
 
@@ -55,15 +56,31 @@ Upload a regenerated animation pack without reflashing ZMK:
 .\tools\upload_merry_pet.ps1 -Port COM24
 ```
 
-The v2 pack contains 57 frames in nine animations. Each stored 160x174 frame
-uses 5-bit pixel indices. Firmware decodes it directly into one 202x220 RGB565
-render surface, with no second framebuffer and no larger QSPI pack.
+The v3 pack contains 30 frames in five animations. Each frame retains Merry's
+native 192x208 pixels and uses 6-bit indices into a private 63-colour RGB565
+palette. Firmware decodes it directly into one 202x220 RGB565 render surface,
+with no second framebuffer and no larger QSPI pack. The complete pack is
+902,720 bytes, leaving 141,760 bytes free in its 1 MiB QSPI slot.
 
-The current generator uses one stable 31-color palette per animation to avoid
+The current generator uses one stable 63-colour palette per animation to avoid
 frame-to-frame color shimmer. Reserved cyan, blue, emerald, deep-green,
 off-white, and plum anchors keep important colors from being displaced by the
-ship's many browns. A sharpened box downsample and perceptually weighted color
-matching preserve fine details before the on-device nearest-neighbour upscale.
+ship's many browns. Offline OKLab palette matching improves perceptual colour
+selection. Keeping the source at its native size avoids the earlier non-integer
+downsample; the device performs only the final nearest-neighbour enlargement to
+202x220, which preserves hard pixel-art edges.
+
+The display bus runs at 8 MHz. A full 202x220 RGB565 transfer takes about 89 ms
+on the wire before command and software overhead, versus about 178 ms at 4 MHz.
+Reducing the pack to 30 frames saves QSPI space and conversion work, but does
+not by itself raise the playback frame rate; bus transfer and the configured
+animation delays determine that.
+
+Pack v3 and settings v2 are deliberate compatibility breaks. Flash this
+firmware before uploading the v3 pack: older firmware rejects it, and the new
+firmware rejects an old v2 pack and safely uses its embedded fallback. Existing
+v1 runtime settings are ignored after the upgrade so obsolete animation IDs
+cannot select the wrong state; the documented defaults are restored.
 
 The upload uses the inactive QSPI slot and commits it only after all chunks and
 the full-pack CRC pass. An interrupted upload leaves the previous slot usable.

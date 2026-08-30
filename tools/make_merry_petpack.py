@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Convert a Codex v1 pet atlas into the compact dongle pet-pack format.
 
-The input atlas is 8 columns by 9 rows of 192x208 RGBA cells. Each output
-frame is 160x174 pixels with a stable 31-colour RGB565 palette per animation;
-palette index zero is transparent/black. Indices are packed as a continuous
-5-bit stream.
+The input atlas is 8 columns by 9 rows of 192x208 RGBA cells. The five Codex-
+ready output animations retain that native resolution and use stable 63-colour
+RGB565 palettes; palette index zero is transparent/black. Indices are packed
+as a continuous 6-bit stream.
 """
 
 from __future__ import annotations
@@ -24,16 +24,16 @@ ATLAS_COLUMNS = 8
 ATLAS_ROWS = 9
 CELL_WIDTH = 192
 CELL_HEIGHT = 208
-FRAME_WIDTH = 160
-FRAME_HEIGHT = 174
+FRAME_WIDTH = 192
+FRAME_HEIGHT = 208
 ALPHA_THRESHOLD = 32
 DEFAULT_SATURATION = 1.18
 DEFAULT_COOL_BOOST = 1.12
-DEFAULT_RESAMPLING = "box-sharp"
+DEFAULT_RESAMPLING = "native"
 
 PACK_MAGIC = 0x31544550  # PET1 in little endian
-PACK_VERSION = 2
-BITS_PER_PIXEL = 5
+PACK_VERSION = 3
+BITS_PER_PIXEL = 6
 PALETTE_SIZE = 1 << BITS_PER_PIXEL
 VISIBLE_COLORS = PALETTE_SIZE - 1
 ANCHOR_COLORS = (
@@ -53,21 +53,18 @@ FRAME_DESC = struct.Struct(f"<IHH{PALETTE_SIZE}H")
 @dataclass(frozen=True)
 class Animation:
     name: str
+    source_row: int
     count: int
     durations_ms: tuple[int, ...]
     loop: bool
 
 
 ANIMATIONS = (
-    Animation("idle", 6, (280, 110, 110, 140, 140, 320), True),
-    Animation("running-right", 8, (120, 120, 120, 120, 120, 120, 120, 220), True),
-    Animation("running-left", 8, (120, 120, 120, 120, 120, 120, 120, 220), True),
-    Animation("waving", 4, (140, 140, 140, 280), False),
-    Animation("jumping", 5, (140, 140, 140, 140, 280), False),
-    Animation("failed", 8, (140, 140, 140, 140, 140, 140, 140, 240), False),
-    Animation("waiting", 6, (150, 150, 150, 150, 150, 260), True),
-    Animation("running", 6, (120, 120, 120, 120, 120, 220), True),
-    Animation("review", 6, (150, 150, 150, 150, 150, 280), True),
+    Animation("idle", 0, 6, (280, 110, 110, 140, 140, 320), True),
+    Animation("running", 7, 6, (120, 120, 120, 120, 120, 220), True),
+    Animation("needs-input", 6, 6, (150, 150, 150, 150, 150, 260), True),
+    Animation("completed", 3, 4, (140, 140, 140, 280), False),
+    Animation("blocked", 5, 8, (140, 140, 140, 140, 140, 140, 140, 240), False),
 )
 
 
@@ -116,18 +113,35 @@ def enhance_pixel(
     return tuple((round(channel * 255) * a + 127) // 255 for channel in boosted)
 
 
-def perceptual_distance(left: tuple[int, int, int], right: tuple[int, int, int]) -> int:
-    """Fast red-mean color distance, weighted for human-visible RGB errors."""
-    red_mean = (left[0] + right[0]) // 2
-    red = left[0] - right[0]
-    green = left[1] - right[1]
-    blue = left[2] - right[2]
-    return (((512 + red_mean) * red * red) >> 8) + 4 * green * green + (
-        ((767 - red_mean) * blue * blue) >> 8
+def rgb_to_oklab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
+    """Convert sRGB to OKLab for hue-stable offline palette matching."""
+    linear = []
+    for channel in rgb:
+        value = channel / 255.0
+        linear.append(value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4)
+    red, green, blue = linear
+    light = 0.4122214708 * red + 0.5363325363 * green + 0.0514459929 * blue
+    medium = 0.2119034982 * red + 0.6806995451 * green + 0.1073969566 * blue
+    short = 0.0883024619 * red + 0.2817188376 * green + 0.6299787005 * blue
+    light_root = light ** (1.0 / 3.0)
+    medium_root = medium ** (1.0 / 3.0)
+    short_root = short ** (1.0 / 3.0)
+    return (
+        0.2104542553 * light_root + 0.7936177850 * medium_root - 0.0040720468 * short_root,
+        1.9779984951 * light_root - 2.4285922050 * medium_root + 0.4505937099 * short_root,
+        0.0259040371 * light_root + 0.7827717662 * medium_root - 0.8086757660 * short_root,
     )
 
 
+def oklab_distance(left: tuple[float, float, float], right: tuple[float, float, float]) -> float:
+    return sum((left[channel] - right[channel]) ** 2 for channel in range(3))
+
+
 def resize_frame(frame: Image.Image, resampling: str) -> Image.Image:
+    if resampling == "native":
+        if frame.size != (FRAME_WIDTH, FRAME_HEIGHT):
+            raise ValueError(f"native frame is {frame.size}, expected {(FRAME_WIDTH, FRAME_HEIGHT)}")
+        return frame.copy()
     if resampling == "nearest":
         return frame.resize((FRAME_WIDTH, FRAME_HEIGHT), Image.Resampling.NEAREST)
     resized = frame.resize((FRAME_WIDTH, FRAME_HEIGHT), Image.Resampling.BOX)
@@ -189,6 +203,7 @@ def quantize_frame(
     rgba = frame.convert("RGBA")
     pixels = image_pixels(rgba)
     palette_display = [rgb565_to_rgb888(value) for value in palette565]
+    palette_oklab = [rgb_to_oklab(color) for color in palette_display]
     nearest_cache: dict[tuple[int, int, int], int] = {}
     indices: list[int] = []
 
@@ -200,9 +215,10 @@ def quantize_frame(
         rgb = enhance_pixel(px, saturation, cool_boost)
         index = nearest_cache.get(rgb)
         if index is None:
+            source_oklab = rgb_to_oklab(rgb)
             index = min(
                 range(1, PALETTE_SIZE),
-                key=lambda candidate: perceptual_distance(rgb, palette_display[candidate]),
+                key=lambda candidate: oklab_distance(source_oklab, palette_oklab[candidate]),
             )
             nearest_cache[rgb] = index
         indices.append(index)
@@ -241,17 +257,18 @@ def c_byte_array(name: str, data: bytes) -> str:
 def write_fallback(output_dir: Path, palette: list[int], pixels: bytes) -> None:
     header = output_dir / "merry_fallback.h"
     source = output_dir / "merry_fallback.c"
+    fallback_size = (FRAME_WIDTH * FRAME_HEIGHT * BITS_PER_PIXEL + 7) // 8
     header.write_text(
-        """/* Generated by tools/make_merry_petpack.py. */
+        f"""/* Generated by tools/make_merry_petpack.py. */
 #pragma once
 
 #include <stdint.h>
 
-#define MERRY_FALLBACK_WIDTH 160
-#define MERRY_FALLBACK_HEIGHT 174
-#define MERRY_FALLBACK_DATA_SIZE 17400
+#define MERRY_FALLBACK_WIDTH {FRAME_WIDTH}
+#define MERRY_FALLBACK_HEIGHT {FRAME_HEIGHT}
+#define MERRY_FALLBACK_DATA_SIZE {fallback_size}
 
-extern const uint16_t merry_fallback_palette[32];
+extern const uint16_t merry_fallback_palette[{PALETTE_SIZE}];
 extern const uint8_t merry_fallback_pixels[MERRY_FALLBACK_DATA_SIZE];
 """,
         encoding="utf-8",
@@ -260,7 +277,7 @@ extern const uint8_t merry_fallback_pixels[MERRY_FALLBACK_DATA_SIZE];
     source.write_text(
         "/* Generated by tools/make_merry_petpack.py. */\n"
         '#include "merry_fallback.h"\n\n'
-        f"const uint16_t merry_fallback_palette[32] = {{{palette_text}}};\n\n"
+        f"const uint16_t merry_fallback_palette[{PALETTE_SIZE}] = {{{palette_text}}};\n\n"
         + c_byte_array("merry_fallback_pixels", pixels),
         encoding="utf-8",
     )
@@ -293,9 +310,9 @@ def build_pack(
                 atlas.crop(
                     (
                         column * CELL_WIDTH,
-                        animation_id * CELL_HEIGHT,
+                        animation.source_row * CELL_HEIGHT,
                         (column + 1) * CELL_WIDTH,
-                        (animation_id + 1) * CELL_HEIGHT,
+                        (animation.source_row + 1) * CELL_HEIGHT,
                     )
                 ),
                 resampling,
@@ -361,7 +378,9 @@ def build_pack(
     fallback = frame_records[0]
     write_fallback(output_dir, fallback[2], fallback[3])
 
-    contact = Image.new("RGB", (ATLAS_COLUMNS * FRAME_WIDTH, ATLAS_ROWS * FRAME_HEIGHT), "#101015")
+    contact = Image.new(
+        "RGB", (ATLAS_COLUMNS * FRAME_WIDTH, len(ANIMATIONS) * FRAME_HEIGHT), "#101015"
+    )
     draw = ImageDraw.Draw(contact)
     frame_cursor = 0
     for row, animation in enumerate(ANIMATIONS):
@@ -384,7 +403,7 @@ def build_pack(
         "palette_colors_per_frame": VISIBLE_COLORS,
         "palette_scope": "animation",
         "anchor_colors": ["#{:02x}{:02x}{:02x}".format(*color) for color in ANCHOR_COLORS],
-        "quantization_distance": "redmean-perceptual",
+        "quantization_distance": "oklab-euclidean",
         "saturation": saturation,
         "blue_green_boost": cool_boost,
         "resampling": resampling,
@@ -415,7 +434,7 @@ def main() -> None:
     parser.add_argument("--saturation", type=float, default=DEFAULT_SATURATION)
     parser.add_argument("--cool-boost", type=float, default=DEFAULT_COOL_BOOST)
     parser.add_argument(
-        "--resampling", choices=("nearest", "box-sharp"), default=DEFAULT_RESAMPLING
+        "--resampling", choices=("native", "nearest", "box-sharp"), default=DEFAULT_RESAMPLING
     )
     args = parser.parse_args()
     if not 1.0 <= args.saturation <= 1.5:

@@ -32,7 +32,7 @@ BUILD_ASSERT(DT_PROP(PET_FLASH_NODE, size) >= (PET_SLOT_COUNT * PET_SLOT_SIZE * 
              "Merry requires the XIAO's 2 MB QSPI flash");
 BUILD_ASSERT(sizeof(struct pet_pack_header) == 40u, "pet pack header layout changed");
 BUILD_ASSERT(sizeof(struct pet_animation_desc) == 8u, "animation descriptor layout changed");
-BUILD_ASSERT(sizeof(struct pet_frame_desc) == 72u, "frame descriptor layout changed");
+BUILD_ASSERT(sizeof(struct pet_frame_desc) == 136u, "frame descriptor layout changed");
 BUILD_ASSERT(PET_FRAME_PACKED_BYTES == MERRY_FALLBACK_DATA_SIZE,
              "fallback and decoder dimensions disagree");
 

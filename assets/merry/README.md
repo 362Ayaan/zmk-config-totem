@@ -6,14 +6,20 @@ dongle display.
 - Source reference: <https://codex-pets.net/#/pets/merry>
 - Pet credit: **Merry by jeansolopreneur**
 - Source format: Codex Pets v1 atlas, 1536x1872, 8 columns by 9 animation rows
-- Dongle format: 160x174, 5 bits per pixel, private 31-colour RGB565 palette per frame
-- Pack: 57 frames / 9 animations / 996,016 bytes
+- Dongle format: native 192x208, 6 bits per pixel, stable 63-colour RGB565 palette per animation
+- Pack: 30 frames / 5 animations / 902,720 bytes
 
 The converter discards RGB values hidden below fully transparent source pixels;
 those pixels are black/transparent in the dongle pack. It uses a stable palette
-per animation, explicit cyan/blue/green/white/plum anchors, a sharpened box
-downsample, and perceptually weighted palette matching. `qa/contact-sheet.png`
-is the deterministic visual check of every converted frame.
+per animation, explicit cyan/blue/green/white/plum anchors, and OKLab palette
+matching. Frames remain at the atlas's native resolution, avoiding a damaging
+non-integer downsample; firmware applies only the small final nearest-neighbour
+enlargement to 202x220. `qa/contact-sheet.png` is the deterministic visual check
+of every converted frame.
+
+The five animations are `Idle` (6 frames), `Running` (6), `NeedsInput` (6),
+`Completed` (4), and `Blocked` (8). They map cleanly to the minimal state set a
+future PC-side Codex bridge needs.
 
 The source page describes this as a community-submitted asset and does not grant
 rights to third-party characters. Keep the credit above and assess the rights

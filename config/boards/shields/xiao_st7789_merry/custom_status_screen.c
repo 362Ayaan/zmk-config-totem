@@ -67,9 +67,8 @@ static lv_style_t modifier_style;
 static lv_style_t rule_style;
 
 static uint8_t packed_frame[PET_FRAME_PACKED_BYTES];
-/* The QSPI pack remains at 160x174. Decode directly into a larger nearest-
- * neighbour surface so changing visual size does not grow or invalidate the
- * atomic pet pack and does not require a second source framebuffer.
+/* The QSPI pack stores the native 192x208 art. Decode directly into a larger
+ * nearest-neighbour surface so no second source framebuffer is required.
  */
 static uint16_t decoded_frame[PET_RENDER_WIDTH * PET_RENDER_HEIGHT];
 static lv_image_dsc_t pet_image_descriptor = {
@@ -90,6 +89,7 @@ static struct merry_config ui_config;
 static uint8_t pet_animation_id = MERRY_ANIM_IDLE;
 static uint16_t pet_animation_frame;
 static uint16_t pet_animation_count = 1u;
+static bool pet_animation_loop = true;
 static bool screen_is_on = true;
 static bool pet_mode;
 static bool ui_initialized;
@@ -100,7 +100,7 @@ static uint8_t packed_palette_index(uint32_t source_pixel) {
     const size_t byte_index = bit_index >> 3;
     const uint8_t bit_shift = bit_index & 7u;
     uint16_t value = packed_frame[byte_index];
-    if (bit_shift > 3u) {
+    if (bit_shift + PET_BITS_PER_PIXEL > 8u) {
         value |= (uint16_t)packed_frame[byte_index + 1u] << 8;
     }
     return (value >> bit_shift) & (PET_PALETTE_SIZE - 1u);
@@ -177,7 +177,15 @@ static void pet_timer_callback(lv_timer_t *timer) {
         return;
     }
 
-    pet_animation_frame = (pet_animation_frame + 1u) % pet_animation_count;
+    if (pet_animation_frame + 1u >= pet_animation_count) {
+        if (!pet_animation_loop) {
+            lv_timer_pause(timer);
+            return;
+        }
+        pet_animation_frame = 0u;
+    } else {
+        pet_animation_frame++;
+    }
     if (load_pet_frame(pet_animation_frame) < 0) {
         pet_animation_frame = 0u;
         pet_animation_count = 1u;
@@ -190,12 +198,14 @@ static void refresh_pet_animation(void) {
     pet_animation_id = ui_config.animation_id;
     if (pet_store_get_animation(pet_animation_id, &animation) == 0) {
         pet_animation_count = animation.frame_count;
+        pet_animation_loop = (animation.flags & 1u) != 0u;
     } else {
         pet_animation_id = MERRY_ANIM_IDLE;
         pet_animation_count =
             pet_store_get_animation(pet_animation_id, &animation) == 0
                 ? animation.frame_count
                 : 1u;
+        pet_animation_loop = true;
     }
     pet_animation_frame = 0u;
     (void)load_pet_frame(0u);

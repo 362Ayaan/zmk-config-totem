@@ -7,8 +7,7 @@ param(
     [ValidateSet('Auto', 'Dashboard', 'Pet', 'Off')]
     [string]$Mode,
 
-    [ValidateSet('Idle', 'RunningRight', 'RunningLeft', 'Waving', 'Jumping',
-                 'Failed', 'Waiting', 'Running', 'Review')]
+    [ValidateSet('Idle', 'Running', 'NeedsInput', 'Completed', 'Blocked')]
     [string]$Animation,
 
     [ValidateRange(0, 100)]
@@ -57,11 +56,9 @@ $configResponseMagic = [uint32]0x3152434d # MCR1
 $modeValues = @{ Auto = 0; Dashboard = 1; Pet = 2; Off = 3 }
 $modeNames = @('Auto', 'Dashboard', 'Pet', 'Off')
 $animationValues = @{
-    Idle = 0; RunningRight = 1; RunningLeft = 2; Waving = 3; Jumping = 4
-    Failed = 5; Waiting = 6; Running = 7; Review = 8
+    Idle = 0; Running = 1; NeedsInput = 2; Completed = 3; Blocked = 4
 }
-$animationNames = @('Idle', 'RunningRight', 'RunningLeft', 'Waving', 'Jumping',
-                    'Failed', 'Waiting', 'Running', 'Review')
+$animationNames = @('Idle', 'Running', 'NeedsInput', 'Completed', 'Blocked')
 
 function Read-Exact {
     param([System.IO.Ports.SerialPort]$Serial, [int]$Count)
@@ -75,7 +72,7 @@ function Read-Exact {
 
 function New-DefaultConfig {
     $bytes = [byte[]]::new(16)
-    $bytes[0] = 1
+    $bytes[0] = 2
     $bytes[3] = 100
     [BitConverter]::GetBytes([uint32]20000).CopyTo($bytes, 4)
     return $bytes

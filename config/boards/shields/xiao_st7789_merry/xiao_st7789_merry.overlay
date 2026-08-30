@@ -42,11 +42,11 @@
         merry_display: st7789v@0 {
             compatible = "sitronix,st7789v";
             reg = <0>;
-            /* The reference ZJY-IPS130-V2.0 driver uses 4 MHz. This remains
-             * fast enough for the 160x174 sprite while leaving signal margin
-             * for hand-soldered wiring.
+            /* 8 MHz halves the 202x220 RGB565 transfer time versus the proven
+             * 4 MHz bring-up setting. The ST7789 supports substantially more;
+             * 8 MHz remains a moderate test for the hand-soldered wiring.
              */
-            mipi-max-frequency = <4000000>;
+            mipi-max-frequency = <8000000>;
             /* This pinned Zephyr binding defines mipi-mode as an enum string,
              * not an integer macro as in older migration examples.
              */
