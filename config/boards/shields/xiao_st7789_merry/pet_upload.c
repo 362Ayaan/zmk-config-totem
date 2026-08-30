@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "pet_store.h"
+#include "merry_config.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -17,6 +18,8 @@
 #define UPLOAD_MAGIC 0x3150554du /* MUP1 */
 #define CHUNK_MAGIC 0x3148434du  /* MCH1 */
 #define RESPONSE_MAGIC 0x3153524du /* MRS1 */
+#define CONFIG_MAGIC 0x3146434du /* MCF1 */
+#define CONFIG_RESPONSE_MAGIC 0x3152434du /* MCR1 */
 #define UPLOAD_CHUNK_SIZE 512u
 #define UPLOAD_READY_SEQUENCE 0xffffu
 #define UPLOAD_FINAL_SEQUENCE 0xfffeu
@@ -33,6 +36,20 @@ enum upload_status {
     UPLOAD_FINALIZE_FAILED = 8,
 };
 
+enum config_operation {
+    CONFIG_GET = 0,
+    CONFIG_SET = 1,
+    CONFIG_RESET = 2,
+};
+
+enum config_status {
+    CONFIG_OK = 0,
+    CONFIG_BAD_HEADER = 1,
+    CONFIG_BAD_CRC = 2,
+    CONFIG_BAD_VALUE = 3,
+    CONFIG_SAVE_FAILED = 4,
+};
+
 struct upload_header {
     uint32_t pack_size;
     uint32_t pack_crc32;
@@ -45,9 +62,26 @@ struct chunk_header {
     uint32_t crc32;
 } __packed;
 
+struct config_request {
+    uint8_t operation;
+    uint8_t reserved[3];
+    struct merry_config config;
+    uint32_t config_crc32;
+} __packed;
+
+struct config_response {
+    uint32_t magic;
+    uint16_t status;
+    uint16_t reserved;
+    struct merry_config config;
+    uint32_t config_crc32;
+} __packed;
+
 BUILD_ASSERT(DT_NODE_HAS_STATUS(MERRY_UART_NODE, okay), "Merry CDC UART alias is not ready");
 BUILD_ASSERT(sizeof(struct upload_header) == 12u, "upload header layout changed");
 BUILD_ASSERT(sizeof(struct chunk_header) == 8u, "chunk header layout changed");
+BUILD_ASSERT(sizeof(struct config_request) == 24u, "config request layout changed");
+BUILD_ASSERT(sizeof(struct config_response) == 28u, "config response layout changed");
 
 static const struct device *const upload_uart = DEVICE_DT_GET(MERRY_UART_NODE);
 
@@ -90,6 +124,22 @@ static int wait_for_magic(uint32_t expected) {
     }
 }
 
+static int wait_for_command(uint32_t *command) {
+    uint32_t window = 0u;
+    while (true) {
+        uint8_t byte;
+        int rc = read_byte(&byte);
+        if (rc < 0) {
+            return rc;
+        }
+        window = (window >> 8) | ((uint32_t)byte << 24);
+        if (window == UPLOAD_MAGIC || window == CONFIG_MAGIC) {
+            *command = window;
+            return 0;
+        }
+    }
+}
+
 static void send_response(uint16_t sequence, enum upload_status status) {
     uint8_t response[8];
     sys_put_le32(RESPONSE_MAGIC, &response[0]);
@@ -98,6 +148,50 @@ static void send_response(uint16_t sequence, enum upload_status status) {
     for (size_t index = 0; index < sizeof(response); index++) {
         uart_poll_out(upload_uart, response[index]);
     }
+}
+
+static void send_config_response(enum config_status status) {
+    struct config_response response = {
+        .magic = CONFIG_RESPONSE_MAGIC,
+        .status = status,
+    };
+    (void)merry_config_get(&response.config);
+    response.config_crc32 =
+        pet_crc32((const uint8_t *)&response.config, sizeof(response.config));
+    const uint8_t *bytes = (const uint8_t *)&response;
+    for (size_t index = 0; index < sizeof(response); index++) {
+        uart_poll_out(upload_uart, bytes[index]);
+    }
+}
+
+static void handle_config_request(void) {
+    struct config_request request;
+    if (read_exact(&request, sizeof(request)) < 0 || request.reserved[0] != 0u ||
+        request.reserved[1] != 0u || request.reserved[2] != 0u ||
+        request.operation > CONFIG_RESET) {
+        send_config_response(CONFIG_BAD_HEADER);
+        return;
+    }
+
+    if (request.operation == CONFIG_GET) {
+        send_config_response(CONFIG_OK);
+        return;
+    }
+    if (request.operation == CONFIG_RESET) {
+        send_config_response(merry_config_reset() == 0 ? CONFIG_OK : CONFIG_SAVE_FAILED);
+        return;
+    }
+    if (pet_crc32((const uint8_t *)&request.config, sizeof(request.config)) !=
+        request.config_crc32) {
+        send_config_response(CONFIG_BAD_CRC);
+        return;
+    }
+    if (!merry_config_is_valid(&request.config)) {
+        send_config_response(CONFIG_BAD_VALUE);
+        return;
+    }
+    send_config_response(merry_config_set(&request.config) == 0 ? CONFIG_OK
+                                                                : CONFIG_SAVE_FAILED);
 }
 
 static void upload_thread(void *unused1, void *unused2, void *unused3) {
@@ -111,8 +205,13 @@ static void upload_thread(void *unused1, void *unused2, void *unused3) {
 
     uint8_t chunk[UPLOAD_CHUNK_SIZE];
     while (true) {
-        if (wait_for_magic(UPLOAD_MAGIC) < 0) {
+        uint32_t command;
+        if (wait_for_command(&command) < 0) {
             k_sleep(K_MSEC(100));
+            continue;
+        }
+        if (command == CONFIG_MAGIC) {
+            handle_config_request();
             continue;
         }
 

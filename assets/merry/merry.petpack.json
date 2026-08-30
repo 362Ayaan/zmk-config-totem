@@ -8,11 +8,14 @@
   "frame_count": 57,
   "animation_count": 9,
   "palette_colors_per_frame": 31,
+  "quantization_distance": "redmean-perceptual",
+  "saturation": 1.14,
+  "blue_green_boost": 1.06,
   "bits_per_pixel": 5,
   "packed_bytes_per_frame": 17400,
   "pack_bytes": 996016,
-  "pack_crc32": "71274b34",
-  "content_crc32": "9d67592e",
+  "pack_crc32": "1fe8832e",
+  "content_crc32": "6a066d23",
   "animations": [
     {
       "id": 0,

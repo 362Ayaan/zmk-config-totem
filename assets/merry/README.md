@@ -10,8 +10,10 @@ dongle display.
 - Pack: 57 frames / 9 animations / 996,016 bytes
 
 The converter discards RGB values hidden below fully transparent source pixels;
-those pixels are black/transparent in the dongle pack. `qa/contact-sheet.png`
-is the deterministic visual check of every converted frame.
+those pixels are black/transparent in the dongle pack. It applies a restrained
+display-oriented color lift before RGB565 conversion and uses perceptually
+weighted palette matching. `qa/contact-sheet.png` is the deterministic visual
+check of every converted frame.
 
 The source page describes this as a community-submitted asset and does not grant
 rights to third-party characters. Keep the credit above and assess the rights
@@ -44,6 +46,13 @@ inactive 1 MB QSPI slot, sends 512-byte CRC-protected chunks, validates the full
 pack, and writes the commit header last. Disconnecting USB during an upload leaves
 the prior slot valid; the embedded static Merry frame is used if neither slot is
 valid.
+
+Display mode, animation, brightness, timeout, and pet position can also be
+changed persistently through the same COM port:
+
+```powershell
+.\tools\configure_merry.ps1 -Port COM12 -Mode Auto -Animation Idle -Brightness 80 -TimeoutSeconds 30
+```
 
 To regenerate the pack from the original downloaded atlas:
 

@@ -25,6 +25,7 @@
 #include <zmk/keymap.h>
 #include <zmk/split/central.h>
 
+#include "merry_config.h"
 #include "pet_store.h"
 
 #define DISPLAY_NODE DT_CHOSEN(zephyr_display)
@@ -46,6 +47,7 @@ static const uint8_t backlight_index = DT_NODE_CHILD_IDX(BACKLIGHT_NODE);
 
 static lv_obj_t *dashboard_battery;
 static lv_obj_t *dashboard_layer_caption;
+static lv_obj_t *dashboard_layer_badge;
 static lv_obj_t *dashboard_layer;
 static lv_obj_t *dashboard_mod_caption;
 static lv_obj_t *dashboard_modifiers;
@@ -55,6 +57,7 @@ static lv_obj_t *pet_image;
 static lv_style_t screen_style;
 static lv_style_t battery_style;
 static lv_style_t caption_style;
+static lv_style_t layer_badge_style;
 static lv_style_t layer_style;
 static lv_style_t modifier_style;
 static lv_style_t rule_style;
@@ -75,10 +78,13 @@ static lv_image_dsc_t pet_image_descriptor = {
 };
 
 static lv_timer_t *pet_timer;
+static struct merry_config ui_config;
+static uint8_t pet_animation_id = MERRY_ANIM_IDLE;
 static uint16_t pet_animation_frame;
 static uint16_t pet_animation_count = 1u;
 static bool screen_is_on = true;
 static bool pet_mode;
+static bool ui_initialized;
 static atomic_t requested_mode = ATOMIC_INIT(ZMK_ACTIVITY_ACTIVE);
 
 static void set_hidden(lv_obj_t *object, bool hidden) {
@@ -92,6 +98,7 @@ static void set_hidden(lv_obj_t *object, bool hidden) {
 static void set_dashboard_visible(bool visible) {
     set_hidden(dashboard_battery, !visible);
     set_hidden(dashboard_layer_caption, !visible);
+    set_hidden(dashboard_layer_badge, !visible);
     set_hidden(dashboard_layer, !visible);
     set_hidden(dashboard_mod_caption, !visible);
     set_hidden(dashboard_modifiers, !visible);
@@ -99,18 +106,16 @@ static void set_dashboard_visible(bool visible) {
 }
 
 static void set_screen_power(bool on) {
-    if (screen_is_on == on) {
-        return;
-    }
-
     if (on) {
-        led_on(backlight, backlight_index);
-        display_blanking_off(display);
+        if (!screen_is_on) {
+            display_blanking_off(display);
+        }
+        (void)led_set_brightness(backlight, backlight_index, ui_config.brightness);
         screen_is_on = true;
         if (pet_mode && pet_timer != NULL) {
             lv_timer_resume(pet_timer);
         }
-    } else {
+    } else if (screen_is_on) {
         if (pet_timer != NULL) {
             lv_timer_pause(pet_timer);
         }
@@ -122,7 +127,7 @@ static void set_screen_power(bool on) {
 
 static int load_pet_frame(uint16_t animation_frame) {
     struct pet_frame frame;
-    int rc = pet_store_read_frame(MERRY_ANIM_IDLE, animation_frame, &frame, packed_frame,
+    int rc = pet_store_read_frame(pet_animation_id, animation_frame, &frame, packed_frame,
                                   sizeof(packed_frame));
     if (rc < 0) {
         return rc;
@@ -165,10 +170,15 @@ static void pet_timer_callback(lv_timer_t *timer) {
 
 static void refresh_pet_animation(void) {
     struct pet_animation_desc animation;
-    if (pet_store_get_animation(MERRY_ANIM_IDLE, &animation) == 0) {
+    pet_animation_id = ui_config.animation_id;
+    if (pet_store_get_animation(pet_animation_id, &animation) == 0) {
         pet_animation_count = animation.frame_count;
     } else {
-        pet_animation_count = 1u;
+        pet_animation_id = MERRY_ANIM_IDLE;
+        pet_animation_count =
+            pet_store_get_animation(pet_animation_id, &animation) == 0
+                ? animation.frame_count
+                : 1u;
     }
     pet_animation_frame = 0u;
     (void)load_pet_frame(0u);
@@ -189,6 +199,7 @@ static void show_pet(void) {
     set_screen_power(true);
     set_dashboard_visible(false);
     set_hidden(pet_image, false);
+    lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
     refresh_pet_animation();
     if (pet_timer != NULL) {
         lv_timer_resume(pet_timer);
@@ -197,7 +208,8 @@ static void show_pet(void) {
 
 static void screen_off_ui_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
-    if (atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
+    if (ui_config.display_mode == MERRY_DISPLAY_AUTO && pet_mode &&
+        atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
         zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
         set_screen_power(false);
     }
@@ -207,13 +219,90 @@ K_WORK_DEFINE(screen_off_ui_work, screen_off_ui_work_callback);
 
 static void screen_off_delay_callback(struct k_work *work) {
     ARG_UNUSED(work);
-    if (atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
+    if (ui_config.display_mode == MERRY_DISPLAY_AUTO && pet_mode &&
+        atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
         zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
         k_work_submit_to_queue(zmk_display_work_q(), &screen_off_ui_work);
     }
 }
 
 K_WORK_DELAYABLE_DEFINE(screen_off_delay_work, screen_off_delay_callback);
+
+static void pet_delay_ui_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+    if (ui_config.display_mode == MERRY_DISPLAY_AUTO &&
+        atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
+        zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
+        show_pet();
+        k_work_reschedule(&screen_off_delay_work,
+                          K_MSEC(CONFIG_MERRY_SCREEN_OFF_DELAY_MS));
+    }
+}
+
+K_WORK_DEFINE(pet_delay_ui_work, pet_delay_ui_work_callback);
+
+static void pet_delay_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+    if (ui_config.display_mode == MERRY_DISPLAY_AUTO &&
+        atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
+        zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
+        k_work_submit_to_queue(zmk_display_work_q(), &pet_delay_ui_work);
+    }
+}
+
+K_WORK_DELAYABLE_DEFINE(pet_delay_work, pet_delay_callback);
+
+static void schedule_pet_after(uint32_t delay_ms) {
+    (void)k_work_cancel_delayable(&screen_off_delay_work);
+    if (delay_ms == 0u) {
+        pet_delay_ui_work_callback(NULL);
+    } else {
+        k_work_reschedule(&pet_delay_work, K_MSEC(delay_ms));
+    }
+}
+
+static void config_apply_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    if (merry_config_get(&ui_config) < 0 || !ui_initialized) {
+        return;
+    }
+
+    (void)k_work_cancel_delayable(&pet_delay_work);
+    (void)k_work_cancel_delayable(&screen_off_delay_work);
+    lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
+
+    switch (ui_config.display_mode) {
+    case MERRY_DISPLAY_DASHBOARD:
+        show_dashboard();
+        break;
+    case MERRY_DISPLAY_PET:
+        show_pet();
+        break;
+    case MERRY_DISPLAY_OFF:
+        set_screen_power(false);
+        break;
+    case MERRY_DISPLAY_AUTO:
+    default:
+        if (zmk_activity_get_state() == ZMK_ACTIVITY_ACTIVE) {
+            show_dashboard();
+        } else if (zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
+            show_dashboard();
+            schedule_pet_after(ui_config.idle_timeout_ms);
+        } else {
+            set_screen_power(false);
+        }
+        break;
+    }
+}
+
+K_WORK_DEFINE(config_apply_work, config_apply_work_callback);
+
+void merry_screen_config_changed(void) {
+    if (ui_initialized && zmk_display_is_initialized()) {
+        k_work_submit_to_queue(zmk_display_work_q(), &config_apply_work);
+    }
+}
 
 struct activity_status_state {
     enum zmk_activity_state state;
@@ -228,14 +317,21 @@ static struct activity_status_state activity_status_get_state(const zmk_event_t 
 
 static void activity_status_update(struct activity_status_state state) {
     atomic_set(&requested_mode, state.state);
+    if (ui_config.display_mode != MERRY_DISPLAY_AUTO) {
+        return;
+    }
     if (state.state == ZMK_ACTIVITY_ACTIVE) {
+        (void)k_work_cancel_delayable(&pet_delay_work);
         (void)k_work_cancel_delayable(&screen_off_delay_work);
         show_dashboard();
     } else if (state.state == ZMK_ACTIVITY_IDLE) {
-        show_pet();
-        k_work_reschedule(&screen_off_delay_work,
-                          K_MSEC(CONFIG_MERRY_SCREEN_OFF_DELAY_MS));
+        show_dashboard();
+        const uint32_t already_idle_ms = CONFIG_ZMK_IDLE_TIMEOUT;
+        schedule_pet_after(ui_config.idle_timeout_ms > already_idle_ms
+                               ? ui_config.idle_timeout_ms - already_idle_ms
+                               : 0u);
     } else {
+        (void)k_work_cancel_delayable(&pet_delay_work);
         (void)k_work_cancel_delayable(&screen_off_delay_work);
         set_screen_power(false);
     }
@@ -357,8 +453,17 @@ static void init_styles(void) {
 
     lv_style_init(&layer_style);
     lv_style_set_text_font(&layer_style, &lv_font_montserrat_32);
-    lv_style_set_text_color(&layer_style, lv_color_hex(0xf5a442));
+    lv_style_set_text_color(&layer_style, lv_color_hex(0xc084fc));
+    lv_style_set_text_letter_space(&layer_style, 2);
     lv_style_set_bg_opa(&layer_style, LV_OPA_TRANSP);
+
+    lv_style_init(&layer_badge_style);
+    lv_style_set_bg_color(&layer_badge_style, lv_color_hex(0x251036));
+    lv_style_set_bg_opa(&layer_badge_style, LV_OPA_COVER);
+    lv_style_set_border_color(&layer_badge_style, lv_color_hex(0x9b5de5));
+    lv_style_set_border_width(&layer_badge_style, 2);
+    lv_style_set_radius(&layer_badge_style, 12);
+    lv_style_set_pad_all(&layer_badge_style, 0);
 
     lv_style_init(&modifier_style);
     lv_style_set_text_font(&modifier_style, &lv_font_montserrat_20);
@@ -375,6 +480,7 @@ static void init_styles(void) {
 lv_obj_t *zmk_display_status_screen(void) {
     init_styles();
     (void)pet_store_init();
+    (void)merry_config_get(&ui_config);
 
     lv_obj_t *screen = lv_obj_create(NULL);
     if (screen == NULL) {
@@ -384,20 +490,22 @@ lv_obj_t *zmk_display_status_screen(void) {
 
     dashboard_battery = lv_label_create(screen);
     dashboard_layer_caption = lv_label_create(screen);
+    dashboard_layer_badge = lv_obj_create(screen);
     dashboard_layer = lv_label_create(screen);
     dashboard_mod_caption = lv_label_create(screen);
     dashboard_modifiers = lv_label_create(screen);
     dashboard_rule = lv_obj_create(screen);
     pet_image = lv_image_create(screen);
-    if (dashboard_battery == NULL || dashboard_layer_caption == NULL || dashboard_layer == NULL ||
-        dashboard_mod_caption == NULL || dashboard_modifiers == NULL || dashboard_rule == NULL ||
-        pet_image == NULL) {
+    if (dashboard_battery == NULL || dashboard_layer_caption == NULL ||
+        dashboard_layer_badge == NULL || dashboard_layer == NULL || dashboard_mod_caption == NULL ||
+        dashboard_modifiers == NULL || dashboard_rule == NULL || pet_image == NULL) {
         lv_obj_del(screen);
         return NULL;
     }
 
     lv_obj_add_style(dashboard_battery, &battery_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_layer_caption, &caption_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_layer_badge, &layer_badge_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_layer, &layer_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_mod_caption, &caption_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_modifiers, &modifier_style, LV_PART_MAIN);
@@ -405,13 +513,15 @@ lv_obj_t *zmk_display_status_screen(void) {
 
     lv_label_set_text(dashboard_layer_caption, "LAYER");
     lv_obj_align(dashboard_layer_caption, LV_ALIGN_CENTER, 0, -48);
+    lv_obj_set_size(dashboard_layer_badge, 190, 58);
+    lv_obj_align(dashboard_layer_badge, LV_ALIGN_CENTER, 0, -4);
     lv_label_set_text(dashboard_mod_caption, "MODIFIERS");
     lv_obj_align(dashboard_mod_caption, LV_ALIGN_BOTTOM_MID, 0, -48);
     lv_obj_set_size(dashboard_rule, 200, 2);
     lv_obj_align(dashboard_rule, LV_ALIGN_TOP_MID, 0, 49);
 
     lv_image_set_src(pet_image, &pet_image_descriptor);
-    lv_obj_align(pet_image, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
     set_hidden(pet_image, true);
 
     pet_timer = lv_timer_create(pet_timer_callback, 250, NULL);
@@ -421,10 +531,12 @@ lv_obj_t *zmk_display_status_screen(void) {
     }
     lv_timer_pause(pet_timer);
 
+    ui_initialized = true;
     merry_layer_status_init();
     merry_battery_status_init();
     modifier_update_work_callback(NULL);
     merry_activity_status_init();
+    config_apply_work_callback(NULL);
 
     return screen;
 }

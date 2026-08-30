@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import colorsys
 import json
 import struct
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ CELL_HEIGHT = 208
 FRAME_WIDTH = 160
 FRAME_HEIGHT = 174
 ALPHA_THRESHOLD = 32
+DEFAULT_SATURATION = 1.14
+DEFAULT_COOL_BOOST = 1.06
 
 PACK_MAGIC = 0x31544550  # PET1 in little endian
 PACK_VERSION = 2
@@ -76,10 +79,45 @@ def composite_on_black(pixel: tuple[int, int, int, int]) -> tuple[int, int, int]
     return ((r * a + 127) // 255, (g * a + 127) // 255, (b * a + 127) // 255)
 
 
-def quantize_frame(frame: Image.Image) -> tuple[list[int], bytes, Image.Image]:
+def enhance_pixel(
+    pixel: tuple[int, int, int, int], saturation: float, cool_boost: float
+) -> tuple[int, int, int]:
+    """Apply a restrained display-oriented boost before alpha compositing.
+
+    The extra cool-range lift targets Merry's water and foliage. Applying it
+    before RGB565 conversion keeps the runtime decoder and memory use unchanged.
+    """
+    r, g, b, a = pixel
+    hue, sat, value = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+    sat = min(1.0, sat * saturation)
+    if 0.25 <= hue <= 0.67 and sat > 0.18:
+        sat = min(1.0, sat * cool_boost)
+        value = min(1.0, value * cool_boost)
+    boosted = colorsys.hsv_to_rgb(hue, sat, value)
+    return tuple((round(channel * 255) * a + 127) // 255 for channel in boosted)
+
+
+def perceptual_distance(left: tuple[int, int, int], right: tuple[int, int, int]) -> int:
+    """Fast red-mean color distance, weighted for human-visible RGB errors."""
+    red_mean = (left[0] + right[0]) // 2
+    red = left[0] - right[0]
+    green = left[1] - right[1]
+    blue = left[2] - right[2]
+    return (((512 + red_mean) * red * red) >> 8) + 4 * green * green + (
+        ((767 - red_mean) * blue * blue) >> 8
+    )
+
+
+def quantize_frame(
+    frame: Image.Image, saturation: float, cool_boost: float
+) -> tuple[list[int], bytes, Image.Image]:
     rgba = frame.convert("RGBA")
     pixels = list(rgba.getdata())
-    visible = [composite_on_black(px) for px in pixels if px[3] >= ALPHA_THRESHOLD]
+    visible = [
+        enhance_pixel(px, saturation, cool_boost)
+        for px in pixels
+        if px[3] >= ALPHA_THRESHOLD
+    ]
     if not visible:
         raise ValueError("frame is empty")
 
@@ -107,15 +145,12 @@ def quantize_frame(frame: Image.Image) -> tuple[list[int], bytes, Image.Image]:
             indices.append(0)
             continue
 
-        rgb = composite_on_black(px)
+        rgb = enhance_pixel(px, saturation, cool_boost)
         index = nearest_cache.get(rgb)
         if index is None:
             index = min(
                 range(1, PALETTE_SIZE),
-                key=lambda candidate: sum(
-                    (rgb[channel] - palette_display[candidate][channel]) ** 2
-                    for channel in range(3)
-                ),
+                key=lambda candidate: perceptual_distance(rgb, palette_display[candidate]),
             )
             nearest_cache[rgb] = index
         indices.append(index)
@@ -179,7 +214,12 @@ extern const uint8_t merry_fallback_pixels[MERRY_FALLBACK_DATA_SIZE];
     )
 
 
-def build_pack(atlas_path: Path, output_dir: Path) -> dict[str, object]:
+def build_pack(
+    atlas_path: Path,
+    output_dir: Path,
+    saturation: float = DEFAULT_SATURATION,
+    cool_boost: float = DEFAULT_COOL_BOOST,
+) -> dict[str, object]:
     atlas = Image.open(atlas_path).convert("RGBA")
     if atlas.size != (ATLAS_COLUMNS * CELL_WIDTH, ATLAS_ROWS * CELL_HEIGHT):
         raise ValueError(f"expected 1536x1872 atlas, got {atlas.size[0]}x{atlas.size[1]}")
@@ -204,7 +244,7 @@ def build_pack(atlas_path: Path, output_dir: Path) -> dict[str, object]:
                     (animation_id + 1) * CELL_HEIGHT,
                 )
             ).resize((FRAME_WIDTH, FRAME_HEIGHT), Image.Resampling.NEAREST)
-            palette, pixels, preview = quantize_frame(cell)
+            palette, pixels, preview = quantize_frame(cell, saturation, cool_boost)
             duration = animation.durations_ms[column]
             frame_records.append((0, duration, palette, pixels, preview, animation.name, column))
             gif_frames.append(preview)
@@ -280,6 +320,9 @@ def build_pack(atlas_path: Path, output_dir: Path) -> dict[str, object]:
         "frame_count": len(frame_records),
         "animation_count": len(animation_records),
         "palette_colors_per_frame": VISIBLE_COLORS,
+        "quantization_distance": "redmean-perceptual",
+        "saturation": saturation,
+        "blue_green_boost": cool_boost,
         "bits_per_pixel": BITS_PER_PIXEL,
         "packed_bytes_per_frame": frame_size,
         "pack_bytes": len(pack),
@@ -304,8 +347,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("atlas", type=Path)
     parser.add_argument("output_dir", type=Path)
+    parser.add_argument("--saturation", type=float, default=DEFAULT_SATURATION)
+    parser.add_argument("--cool-boost", type=float, default=DEFAULT_COOL_BOOST)
     args = parser.parse_args()
-    manifest = build_pack(args.atlas, args.output_dir)
+    if not 1.0 <= args.saturation <= 1.5:
+        parser.error("--saturation must be between 1.0 and 1.5")
+    if not 1.0 <= args.cool_boost <= 1.25:
+        parser.error("--cool-boost must be between 1.0 and 1.25")
+    manifest = build_pack(args.atlas, args.output_dir, args.saturation, args.cool_boost)
     print(json.dumps(manifest, indent=2))
 
 
