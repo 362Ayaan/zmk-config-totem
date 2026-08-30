@@ -35,6 +35,8 @@ BUILD_ASSERT(sizeof(struct pet_animation_desc) == 8u, "animation descriptor layo
 BUILD_ASSERT(sizeof(struct pet_frame_desc) == 136u, "frame descriptor layout changed");
 BUILD_ASSERT(PET_FRAME_PACKED_BYTES == MERRY_FALLBACK_DATA_SIZE,
              "fallback and decoder dimensions disagree");
+BUILD_ASSERT((PET_FRAME_PACKED_BYTES % 4u) == 0u,
+             "Nordic QSPI frame reads must be word-sized");
 
 struct pet_slot_header {
     uint32_t magic;
@@ -59,6 +61,8 @@ static uint8_t current_slot;
 static uint32_t current_generation;
 static uint32_t current_pack_size;
 static struct pet_pack_header current_pack;
+static bool current_quarantined;
+static int32_t current_last_error;
 
 static bool upload_active;
 static uint8_t upload_slot;
@@ -69,6 +73,22 @@ static uint32_t upload_crc;
 
 static uint32_t slot_offset(uint8_t slot) { return (uint32_t)slot * PET_SLOT_SIZE; }
 static uint32_t pack_offset(uint8_t slot) { return slot_offset(slot) + PET_SLOT_HEADER_AREA; }
+
+static int flash_read_chunked(uint32_t offset, void *destination, size_t size) {
+    uint8_t *bytes = destination;
+
+    while (size > 0u) {
+        const size_t chunk = MIN(size, (size_t)PET_IO_CHUNK_SIZE);
+        int rc = flash_read(pet_flash, offset, bytes, chunk);
+        if (rc < 0) {
+            return rc;
+        }
+        offset += chunk;
+        bytes += chunk;
+        size -= chunk;
+    }
+    return 0;
+}
 
 uint32_t pet_crc32_update(uint32_t crc, const uint8_t *data, size_t size) {
     while (size-- > 0u) {
@@ -107,7 +127,8 @@ static bool bounds_ok(uint32_t offset, uint32_t size, uint32_t total) {
     return offset <= total && size <= total - offset;
 }
 
-static int validate_pack(uint8_t slot, uint32_t advertised_size, struct pet_pack_header *header) {
+static int validate_pack(uint8_t slot, uint32_t advertised_size, struct pet_pack_header *header,
+                         bool verify_content_crc) {
     const uint32_t base = pack_offset(slot);
     int rc = flash_read(pet_flash, base, header, sizeof(*header));
     if (rc < 0) {
@@ -165,13 +186,17 @@ static int validate_pack(uint8_t slot, uint32_t advertised_size, struct pet_pack
         }
     }
 
-    uint32_t content_crc;
-    rc = flash_crc32(base + sizeof(*header), header->total_size - sizeof(*header), &content_crc);
-    return rc < 0 ? rc : (content_crc == header->content_crc32 ? 0 : -EBADMSG);
+    if (verify_content_crc) {
+        uint32_t content_crc;
+        rc = flash_crc32(base + sizeof(*header), header->total_size - sizeof(*header),
+                         &content_crc);
+        return rc < 0 ? rc : (content_crc == header->content_crc32 ? 0 : -EBADMSG);
+    }
+    return 0;
 }
 
 static int validate_slot(uint8_t slot, struct pet_slot_header *slot_header,
-                         struct pet_pack_header *pack_header) {
+                         struct pet_pack_header *pack_header, bool verify_crc) {
     int rc = flash_read(pet_flash, slot_offset(slot), slot_header, sizeof(*slot_header));
     if (rc < 0) {
         return rc;
@@ -183,12 +208,14 @@ static int validate_slot(uint8_t slot, struct pet_slot_header *slot_header,
         return -EINVAL;
     }
 
-    uint32_t pack_crc;
-    rc = flash_crc32(pack_offset(slot), slot_header->pack_size, &pack_crc);
-    if (rc < 0 || pack_crc != slot_header->pack_crc32) {
-        return rc < 0 ? rc : -EBADMSG;
+    if (verify_crc) {
+        uint32_t pack_crc;
+        rc = flash_crc32(pack_offset(slot), slot_header->pack_size, &pack_crc);
+        if (rc < 0 || pack_crc != slot_header->pack_crc32) {
+            return rc < 0 ? rc : -EBADMSG;
+        }
     }
-    return validate_pack(slot, slot_header->pack_size, pack_header);
+    return validate_pack(slot, slot_header->pack_size, pack_header, verify_crc);
 }
 
 static bool generation_newer(uint32_t candidate, uint32_t current) {
@@ -212,7 +239,11 @@ int pet_store_init(void) {
     for (uint8_t slot = 0; slot < PET_SLOT_COUNT; slot++) {
         struct pet_slot_header slot_header;
         struct pet_pack_header pack_header;
-        if (validate_slot(slot, &slot_header, &pack_header) == 0 &&
+        /* A committed slot was fully CRC-checked before its header was written.
+         * At boot, check its structure only. Re-reading and software-CRCing up
+         * to two complete 1 MiB slots here can stall USB and display startup.
+         */
+        if (validate_slot(slot, &slot_header, &pack_header, false) == 0 &&
             (!current_valid || generation_newer(slot_header.generation, current_generation))) {
             current_valid = true;
             current_slot = slot;
@@ -246,6 +277,64 @@ bool pet_store_has_uploaded_pack(void) {
     return result;
 }
 
+void pet_store_get_status(struct pet_store_status *status) {
+    if (status == NULL) {
+        return;
+    }
+    k_mutex_lock(&store_mutex, K_FOREVER);
+    *status = (struct pet_store_status){
+        .pack_version = PET_PACK_VERSION,
+        .uploaded_pack_active = current_valid ? 1u : 0u,
+        .active_slot = current_valid ? current_slot : 0xffu,
+        .quarantined = current_quarantined ? 1u : 0u,
+        .generation = current_generation,
+        .pack_size = current_pack_size,
+        .last_error = current_last_error,
+    };
+    k_mutex_unlock(&store_mutex);
+}
+
+static void quarantine_current_locked(int error) {
+    if (current_valid) {
+        LOG_ERR("Merry pack read failed (%d); using embedded fallback", error);
+    }
+    current_valid = false;
+    current_quarantined = true;
+    current_last_error = error;
+}
+
+int pet_store_clear_uploads(void) {
+    if (!device_is_ready(pet_flash)) {
+        return -ENODEV;
+    }
+
+    k_mutex_lock(&store_mutex, K_FOREVER);
+    if (upload_active) {
+        k_mutex_unlock(&store_mutex);
+        return -EBUSY;
+    }
+    /* Stop using external data before erasing. Even if one erase fails, the
+     * running firmware must remain on the embedded fallback.
+     */
+    current_valid = false;
+    current_slot = 0u;
+    current_generation = 0u;
+    current_pack_size = 0u;
+    memset(&current_pack, 0, sizeof(current_pack));
+    current_quarantined = false;
+    current_last_error = 0;
+
+    int first_rc = flash_erase(pet_flash, slot_offset(0u), PET_SLOT_SIZE);
+    int second_rc = flash_erase(pet_flash, slot_offset(1u), PET_SLOT_SIZE);
+    int rc = first_rc < 0 ? first_rc : second_rc;
+    if (rc < 0) {
+        current_quarantined = true;
+        current_last_error = rc;
+    }
+    k_mutex_unlock(&store_mutex);
+    return rc;
+}
+
 int pet_store_get_animation(uint8_t animation_id, struct pet_animation_desc *animation) {
     if (animation == NULL) {
         return -EINVAL;
@@ -271,8 +360,23 @@ int pet_store_get_animation(uint8_t animation_id, struct pet_animation_desc *ani
                         pack_offset(current_slot) + current_pack.animation_table_offset +
                             (uint32_t)animation_id * sizeof(*animation),
                         animation, sizeof(*animation));
+    if (rc == 0 &&
+        (animation->id != animation_id || animation->frame_count == 0u ||
+         animation->first_frame >= current_pack.frame_count ||
+         animation->frame_count > current_pack.frame_count - animation->first_frame)) {
+        rc = -EBADMSG;
+    }
+    if (rc < 0) {
+        quarantine_current_locked(rc);
+    }
     k_mutex_unlock(&store_mutex);
     return rc;
+}
+
+static void copy_embedded_fallback(struct pet_frame *frame, uint8_t *packed_pixels) {
+    frame->duration_ms = 1000u;
+    memcpy(frame->palette, merry_fallback_palette, sizeof(frame->palette));
+    memcpy(packed_pixels, merry_fallback_pixels, PET_FRAME_PACKED_BYTES);
 }
 
 int pet_store_read_frame(uint8_t animation_id, uint16_t animation_frame,
@@ -288,9 +392,7 @@ int pet_store_read_frame(uint8_t animation_id, uint16_t animation_frame,
             k_mutex_unlock(&store_mutex);
             return -ENOENT;
         }
-        frame->duration_ms = 1000u;
-        memcpy(frame->palette, merry_fallback_palette, sizeof(frame->palette));
-        memcpy(packed_pixels, merry_fallback_pixels, PET_FRAME_PACKED_BYTES);
+        copy_embedded_fallback(frame, packed_pixels);
         k_mutex_unlock(&store_mutex);
         return 0;
     }
@@ -305,9 +407,21 @@ int pet_store_read_frame(uint8_t animation_id, uint16_t animation_frame,
                         pack_offset(current_slot) + current_pack.animation_table_offset +
                             (uint32_t)animation_id * sizeof(animation),
                         &animation, sizeof(animation));
-    if (rc < 0 || animation_frame >= animation.frame_count) {
+    if (rc == 0 &&
+        (animation.id != animation_id || animation.frame_count == 0u ||
+         animation.first_frame >= current_pack.frame_count ||
+         animation.frame_count > current_pack.frame_count - animation.first_frame)) {
+        rc = -EBADMSG;
+    }
+    if (rc < 0) {
+        quarantine_current_locked(rc);
+        copy_embedded_fallback(frame, packed_pixels);
         k_mutex_unlock(&store_mutex);
-        return rc < 0 ? rc : -ERANGE;
+        return 0;
+    }
+    if (animation_frame >= animation.frame_count) {
+        k_mutex_unlock(&store_mutex);
+        return -ERANGE;
     }
 
     struct pet_frame_desc stored_frame;
@@ -316,13 +430,25 @@ int pet_store_read_frame(uint8_t animation_id, uint16_t animation_frame,
                     pack_offset(current_slot) + current_pack.frame_table_offset +
                         (uint32_t)frame_index * sizeof(stored_frame),
                     &stored_frame, sizeof(stored_frame));
+    if (rc == 0 &&
+        (stored_frame.duration_ms < 20u || stored_frame.duration_ms > 10000u ||
+         stored_frame.data_offset < current_pack.data_offset ||
+         !bounds_ok(stored_frame.data_offset, PET_FRAME_PACKED_BYTES,
+                    current_pack.total_size))) {
+        rc = -EBADMSG;
+    }
     if (rc == 0) {
-        rc = flash_read(pet_flash, pack_offset(current_slot) + stored_frame.data_offset,
-                        packed_pixels, PET_FRAME_PACKED_BYTES);
+        rc = flash_read_chunked(pack_offset(current_slot) + stored_frame.data_offset,
+                                packed_pixels, PET_FRAME_PACKED_BYTES);
     }
     if (rc == 0) {
         frame->duration_ms = stored_frame.duration_ms;
         memcpy(frame->palette, stored_frame.palette, sizeof(frame->palette));
+    }
+    if (rc < 0) {
+        quarantine_current_locked(rc);
+        copy_embedded_fallback(frame, packed_pixels);
+        rc = 0;
     }
     k_mutex_unlock(&store_mutex);
     return rc;
@@ -345,10 +471,14 @@ int pet_store_upload_begin(uint32_t pack_size) {
         return upload_active ? -EBUSY : -ENODEV;
     }
 
-    upload_slot = current_valid ? (uint8_t)(1u - current_slot) : 0u;
+    /* A quarantined slot still participates in generation ordering. Replace
+     * the other slot with a newer generation instead of accidentally writing
+     * generation 1 and allowing the quarantined generation to win on reboot.
+     */
+    upload_slot = current_generation > 0u ? (uint8_t)(1u - current_slot) : 0u;
     upload_size = pack_size;
     upload_written = 0u;
-    upload_generation = current_valid ? current_generation + 1u : 1u;
+    upload_generation = current_generation + 1u;
     upload_crc = 0xffffffffu;
 
     int rc = flash_erase(pet_flash, slot_offset(upload_slot), PET_SLOT_SIZE);
@@ -388,7 +518,7 @@ int pet_store_upload_finish(uint32_t expected_crc32) {
     }
 
     struct pet_pack_header candidate_pack;
-    int rc = validate_pack(upload_slot, upload_size, &candidate_pack);
+    int rc = validate_pack(upload_slot, upload_size, &candidate_pack, true);
     if (rc == 0) {
         struct pet_slot_header slot_header = {
             .magic = PET_SLOT_MAGIC,
@@ -408,6 +538,8 @@ int pet_store_upload_finish(uint32_t expected_crc32) {
         current_generation = upload_generation;
         current_pack_size = upload_size;
         current_pack = candidate_pack;
+        current_quarantined = false;
+        current_last_error = 0;
     }
     upload_active = false;
     k_mutex_unlock(&store_mutex);

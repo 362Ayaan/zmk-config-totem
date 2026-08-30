@@ -56,7 +56,7 @@ Upload a regenerated animation pack without reflashing ZMK:
 .\tools\upload_merry_pet.ps1 -Port COM24
 ```
 
-The v3 pack contains 30 frames in five animations. Each frame retains Merry's
+The v4 pack contains 30 frames in five animations. Each frame retains Merry's
 native 192x208 pixels and uses 6-bit indices into a private 63-colour RGB565
 palette. Firmware decodes it directly into one 202x220 RGB565 render surface,
 with no second framebuffer and no larger QSPI pack. The complete pack is
@@ -76,11 +76,28 @@ Reducing the pack to 30 frames saves QSPI space and conversion work, but does
 not by itself raise the playback frame rate; bus transfer and the configured
 animation delays determine that.
 
-Pack v3 and settings v2 are deliberate compatibility breaks. Flash this
-firmware before uploading the v3 pack: older firmware rejects it, and the new
-firmware rejects an old v2 pack and safely uses its embedded fallback. Existing
-v1 runtime settings are ignored after the upgrade so obsolete animation IDs
-cannot select the wrong state; the documented defaults are restored.
+Pack v4 and settings v2 are deliberate compatibility breaks. Flash this
+firmware before uploading the v4 pack: older firmware rejects it, and the new
+firmware rejects v2/v3 packs and safely uses its embedded fallback. Existing v1
+runtime settings are ignored after the upgrade so obsolete animation IDs cannot
+select the wrong state; the documented defaults are restored.
+
+Runtime QSPI frame reads are split into aligned 512-byte transfers. A failed
+animation descriptor or frame transfer quarantines the active pack in RAM and
+immediately renders the embedded idle frame instead of leaving a blank image.
+Boot checks only committed-slot structure; the expensive complete CRC pass is
+performed before the uploader commits a slot, keeping USB and display startup
+out of the multi-megabyte validation path.
+
+Inspect pack health after an upload or clear both external slots explicitly:
+
+```powershell
+.\tools\inspect_merry_store.ps1 -Port COM24
+.\tools\inspect_merry_store.ps1 -Port COM24 -Clear
+```
+
+Clearing affects only the two QSPI pet slots. It does not erase ZMK, pairings,
+or display settings, and the embedded pet remains available.
 
 The upload uses the inactive QSPI slot and commits it only after all chunks and
 the full-pack CRC pass. An interrupted upload leaves the previous slot usable.

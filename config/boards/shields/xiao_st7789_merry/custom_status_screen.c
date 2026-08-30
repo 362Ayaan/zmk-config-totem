@@ -66,7 +66,7 @@ static lv_style_t layer_style;
 static lv_style_t modifier_style;
 static lv_style_t rule_style;
 
-static uint8_t packed_frame[PET_FRAME_PACKED_BYTES];
+static uint8_t packed_frame[PET_FRAME_PACKED_BYTES] __aligned(4);
 /* The QSPI pack stores the native 192x208 art. Decode directly into a larger
  * nearest-neighbour surface so no second source framebuffer is required.
  */

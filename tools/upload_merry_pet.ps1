@@ -4,7 +4,7 @@ param(
     [ValidatePattern('^COM\d+$')]
     [string]$Port,
 
-    [string]$PetPack = (Join-Path $PSScriptRoot '..\assets\merry\merry.petpack')
+    [string]$PetPack
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,6 +80,9 @@ function Read-Response {
     }
 }
 
+if (-not $PSBoundParameters.ContainsKey('PetPack')) {
+    $PetPack = Join-Path $PSScriptRoot '..\assets\merry\merry.petpack'
+}
 $resolvedPack = (Resolve-Path -LiteralPath $PetPack).Path
 $pack = [IO.File]::ReadAllBytes($resolvedPack)
 if ($pack.Length -gt (1024 * 1024 - 4096)) {

@@ -7,7 +7,7 @@ dongle display.
 - Pet credit: **Merry by jeansolopreneur**
 - Source format: Codex Pets v1 atlas, 1536x1872, 8 columns by 9 animation rows
 - Dongle format: native 192x208, 6 bits per pixel, stable 63-colour RGB565 palette per animation
-- Pack: 30 frames / 5 animations / 902,720 bytes
+- Pack v4: 30 frames / 5 animations / 902,720 bytes
 
 The converter discards RGB values hidden below fully transparent source pixels;
 those pixels are black/transparent in the dongle pack. It uses a stable palette

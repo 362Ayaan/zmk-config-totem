@@ -9,6 +9,18 @@
 
 int pet_store_init(void);
 bool pet_store_has_uploaded_pack(void);
+struct pet_store_status {
+    uint8_t pack_version;
+    uint8_t uploaded_pack_active;
+    uint8_t active_slot;
+    uint8_t quarantined;
+    uint32_t generation;
+    uint32_t pack_size;
+    int32_t last_error;
+};
+
+void pet_store_get_status(struct pet_store_status *status);
+int pet_store_clear_uploads(void);
 int pet_store_get_animation(uint8_t animation_id, struct pet_animation_desc *animation);
 int pet_store_read_frame(uint8_t animation_id, uint16_t animation_frame,
                          struct pet_frame *frame, uint8_t *packed_pixels,
@@ -22,4 +34,3 @@ void pet_store_upload_abort(void);
 
 uint32_t pet_crc32(const uint8_t *data, size_t size);
 uint32_t pet_crc32_update(uint32_t crc, const uint8_t *data, size_t size);
-

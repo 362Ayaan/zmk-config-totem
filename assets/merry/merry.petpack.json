@@ -2,7 +2,7 @@
   "source": "C:\\Users\\Ayaan\\AppData\\Local\\Temp\\browser-use\\assets\\93ab3dbd-9dce-41e3-885b-578eb5ce3cfd\\6d675a34edf272e8.webp",
   "source_url": "https://codex-pets.net/#/pets/merry",
   "attribution": "Merry by jeansolopreneur on codex-pets.net",
-  "format_version": 3,
+  "format_version": 4,
   "frame_width": 192,
   "frame_height": 208,
   "frame_count": 30,
@@ -24,7 +24,7 @@
   "bits_per_pixel": 6,
   "packed_bytes_per_frame": 29952,
   "pack_bytes": 902720,
-  "pack_crc32": "2687a290",
+  "pack_crc32": "ef9d6c4d",
   "content_crc32": "90ccc9bb",
   "animations": [
     {

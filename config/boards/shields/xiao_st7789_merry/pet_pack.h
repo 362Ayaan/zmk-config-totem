@@ -8,7 +8,7 @@
 #include <zephyr/toolchain.h>
 
 #define PET_PACK_MAGIC 0x31544550u /* PET1 */
-#define PET_PACK_VERSION 3u
+#define PET_PACK_VERSION 4u
 #define PET_FRAME_WIDTH 192u
 #define PET_FRAME_HEIGHT 208u
 #define PET_BITS_PER_PIXEL 6u
