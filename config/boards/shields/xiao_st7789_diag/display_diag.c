@@ -10,8 +10,13 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
 
-#define DIAG_NODE DT_NODELABEL(merry_diag)
 #define DIAG_SPI_NODE DT_ALIAS(merry_diag_spi)
+#define DIAG_GPIO_NODE DT_NODELABEL(gpio0)
+
+/* Verified XIAO nRF52840 pin mapping: D0=P0.02, D1=P0.03, D2=P0.28. */
+#define DC_PIN 2u
+#define RESET_PIN 3u
+#define BACKLIGHT_PIN 28u
 
 #define LCD_WIDTH 240u
 #define LCD_HEIGHT 240u
@@ -29,11 +34,10 @@
 #define CMD_COLMOD 0x3au
 
 BUILD_ASSERT(DT_NODE_HAS_STATUS(DIAG_SPI_NODE, okay), "Diagnostic SPI bus must be enabled");
+BUILD_ASSERT(DT_NODE_HAS_STATUS(DIAG_GPIO_NODE, okay), "Diagnostic GPIO port must be enabled");
 
 static const struct device *const diag_spi = DEVICE_DT_GET(DIAG_SPI_NODE);
-static const struct gpio_dt_spec dc = GPIO_DT_SPEC_GET(DIAG_NODE, dc_gpios);
-static const struct gpio_dt_spec reset = GPIO_DT_SPEC_GET(DIAG_NODE, reset_gpios);
-static const struct gpio_dt_spec backlight = GPIO_DT_SPEC_GET(DIAG_NODE, backlight_gpios);
+static const struct device *const diag_gpio = DEVICE_DT_GET(DIAG_GPIO_NODE);
 
 static const struct spi_config spi_config = {
     .frequency = LCD_SPI_HZ,
@@ -43,6 +47,16 @@ static const struct spi_config spi_config = {
 
 static uint8_t line_buffer[LCD_WIDTH * 2u];
 
+static void signal_runtime_error(void) {
+    /* A fast repeating flash means Zephyr rejected an SPI/GPIO operation. */
+    while (true) {
+        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 0);
+        k_sleep(K_MSEC(100));
+        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 1);
+        k_sleep(K_MSEC(100));
+    }
+}
+
 static int spi_send(const uint8_t *data, size_t length) {
     const struct spi_buf buffer = {.buf = (void *)data, .len = length};
     const struct spi_buf_set buffers = {.buffers = &buffer, .count = 1u};
@@ -50,7 +64,7 @@ static int spi_send(const uint8_t *data, size_t length) {
 }
 
 static int write_command(uint8_t command, const uint8_t *data, size_t length) {
-    int rc = gpio_pin_set_dt(&dc, 0);
+    int rc = gpio_pin_set(diag_gpio, DC_PIN, 0);
     if (rc < 0) {
         return rc;
     }
@@ -58,18 +72,18 @@ static int write_command(uint8_t command, const uint8_t *data, size_t length) {
     if (rc < 0 || length == 0u) {
         return rc;
     }
-    rc = gpio_pin_set_dt(&dc, 1);
+    rc = gpio_pin_set(diag_gpio, DC_PIN, 1);
     return rc < 0 ? rc : spi_send(data, length);
 }
 
 static int panel_init(void) {
     /* Start with an intentionally generous power-up and reset sequence. */
     k_sleep(K_MSEC(200));
-    gpio_pin_set_dt(&reset, 1);
+    gpio_pin_set(diag_gpio, RESET_PIN, 1);
     k_sleep(K_MSEC(20));
-    gpio_pin_set_dt(&reset, 0);
+    gpio_pin_set(diag_gpio, RESET_PIN, 0);
     k_sleep(K_MSEC(20));
-    gpio_pin_set_dt(&reset, 1);
+    gpio_pin_set(diag_gpio, RESET_PIN, 1);
     k_sleep(K_MSEC(150));
 
     int rc = write_command(CMD_SWRESET, NULL, 0u);
@@ -131,7 +145,7 @@ static int fill_screen(uint16_t rgb565) {
     if (rc < 0) {
         return rc;
     }
-    rc = gpio_pin_set_dt(&dc, 1);
+    rc = gpio_pin_set(diag_gpio, DC_PIN, 1);
     if (rc < 0) {
         return rc;
     }
@@ -149,28 +163,27 @@ static void diagnostic_thread(void *unused1, void *unused2, void *unused3) {
     ARG_UNUSED(unused2);
     ARG_UNUSED(unused3);
 
-    if (!device_is_ready(diag_spi) || !gpio_is_ready_dt(&dc) ||
-        !gpio_is_ready_dt(&reset) || !gpio_is_ready_dt(&backlight)) {
+    if (!device_is_ready(diag_spi) || !device_is_ready(diag_gpio)) {
         return;
     }
 
-    if (gpio_pin_configure_dt(&dc, GPIO_OUTPUT_INACTIVE) < 0 ||
-        gpio_pin_configure_dt(&reset, GPIO_OUTPUT_ACTIVE) < 0 ||
-        gpio_pin_configure_dt(&backlight, GPIO_OUTPUT_INACTIVE) < 0) {
+    if (gpio_pin_configure(diag_gpio, DC_PIN, GPIO_OUTPUT_INACTIVE) < 0 ||
+        gpio_pin_configure(diag_gpio, RESET_PIN, GPIO_OUTPUT_ACTIVE) < 0 ||
+        gpio_pin_configure(diag_gpio, BACKLIGHT_PIN, GPIO_OUTPUT_INACTIVE) < 0) {
         return;
     }
 
     /* Three visible backlight flashes identify this diagnostic firmware. */
     for (uint8_t flash = 0; flash < 3u; flash++) {
-        gpio_pin_set_dt(&backlight, 1);
+        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 1);
         k_sleep(K_MSEC(250));
-        gpio_pin_set_dt(&backlight, 0);
+        gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 0);
         k_sleep(K_MSEC(250));
     }
-    gpio_pin_set_dt(&backlight, 1);
+    gpio_pin_set(diag_gpio, BACKLIGHT_PIN, 1);
 
     if (panel_init() < 0) {
-        return;
+        signal_runtime_error();
     }
 
     static const uint16_t colors[] = {
@@ -184,7 +197,7 @@ static void diagnostic_thread(void *unused1, void *unused2, void *unused3) {
     while (true) {
         for (size_t index = 0; index < ARRAY_SIZE(colors); index++) {
             if (fill_screen(colors[index]) < 0) {
-                return;
+                signal_runtime_error();
             }
             k_sleep(K_SECONDS(2));
         }

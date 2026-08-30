@@ -1,20 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 
-#include <dt-bindings/gpio/gpio.h>
-
 / {
     aliases {
         merry-diag-spi = &xiao_spi;
-    };
-
-    merry_diag: merry-diag {
-        /* Use the connector's resolved nRF GPIOs directly. xiao_d is a
-         * gpio-map connector rather than a runtime GPIO controller, so a
-         * custom unbound diagnostic node cannot pass it to DEVICE_DT_GET().
-         */
-        dc-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;        /* XIAO D0 */
-        reset-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;     /* XIAO D1 */
-        backlight-gpios = <&gpio0 28 GPIO_ACTIVE_HIGH>; /* XIAO D2 */
     };
 };
 
