@@ -108,6 +108,7 @@ $script:merryAsStreamMethod = [System.IO.WindowsRuntimeStreamExtensions].GetMeth
     Where-Object { $_.Name -eq 'AsStreamForRead' -and $_.GetParameters().Count -eq 1 } |
     Select-Object -First 1
 $script:merryMediaManager = $null
+$script:merryManagerRefreshedAt = [DateTime]::MinValue
 
 function Wait-MerryWinRt {
     param($Operation, [Type]$ResultType)
@@ -123,35 +124,94 @@ function Wait-MerryWinRt {
 }
 
 function Initialize-MerryMedia {
+    if ($null -ne $script:merryMediaManager -and
+        [System.Runtime.InteropServices.Marshal]::IsComObject($script:merryMediaManager)) {
+        $null = [System.Runtime.InteropServices.Marshal]::ReleaseComObject(
+            $script:merryMediaManager
+        )
+    }
     $script:merryMediaManager = Wait-MerryWinRt (
         [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
     ) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+    $script:merryManagerRefreshedAt = [DateTime]::UtcNow
 }
 
-function Get-MerrySpotifySnapshot {
+function Get-MerrySpotifyPlayback {
     if ($null -eq $script:merryMediaManager) {
         Initialize-MerryMedia
     }
-    $session = @($script:merryMediaManager.GetSessions()) |
-        Where-Object SourceAppUserModelId -Match 'Spotify' |
-        Select-Object -First 1
-    if ($null -eq $session) {
-        return [pscustomobject]@{ State = 'None'; Key = $null; Properties = $null }
+
+    $candidates = @()
+    foreach ($session in @($script:merryMediaManager.GetSessions()) |
+        Where-Object SourceAppUserModelId -Match 'Spotify') {
+        try {
+            $status = [string]$session.GetPlaybackInfo().PlaybackStatus
+            $rank = switch ($status) {
+                'Playing' { 0 }
+                'Paused' { 1 }
+                default { 2 }
+            }
+            $candidates += [pscustomobject]@{
+                Session = $session
+                State = $status
+                Rank = $rank
+            }
+        }
+        catch {
+            # A dead session can remain in GetSessions briefly. Ignore it and
+            # prefer a live Spotify session from the same manager snapshot.
+        }
     }
 
-    $status = [string]$session.GetPlaybackInfo().PlaybackStatus
-    if ($status -notin @('Playing', 'Paused')) {
-        return [pscustomobject]@{ State = 'None'; Key = $null; Properties = $null }
+    $selected = $candidates | Sort-Object Rank | Select-Object -First 1
+    if (($null -eq $selected -or $selected.State -notin @('Playing', 'Paused')) -and
+        [DateTime]::UtcNow -ge $script:merryManagerRefreshedAt.AddSeconds(10)) {
+        Initialize-MerryMedia
+        foreach ($session in @($script:merryMediaManager.GetSessions()) |
+            Where-Object SourceAppUserModelId -Match 'Spotify') {
+            try {
+                $status = [string]$session.GetPlaybackInfo().PlaybackStatus
+                if ($status -in @('Playing', 'Paused')) {
+                    return [pscustomobject]@{ State = $status; Session = $session }
+                }
+            }
+            catch {}
+        }
     }
-    $properties = Wait-MerryWinRt ($session.TryGetMediaPropertiesAsync()) (
+
+    if ($null -eq $selected -or $selected.State -notin @('Playing', 'Paused')) {
+        return [pscustomobject]@{ State = 'None'; Session = $null }
+    }
+    return [pscustomobject]@{ State = $selected.State; Session = $selected.Session }
+}
+
+function Get-MerrySpotifyTrack {
+    param($Playback)
+
+    if ($null -eq $Playback.Session -or $Playback.State -notin @('Playing', 'Paused')) {
+        return [pscustomobject]@{
+            State = 'None'; Key = $null; Properties = $null; Session = $null
+        }
+    }
+    $properties = Wait-MerryWinRt ($Playback.Session.TryGetMediaPropertiesAsync()) (
         [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties]
     )
     if ($null -eq $properties.Thumbnail) {
-        return [pscustomobject]@{ State = 'None'; Key = $null; Properties = $null }
+        return [pscustomobject]@{
+            State = $Playback.State; Key = $null; Properties = $null
+            Session = $Playback.Session
+        }
     }
     $key = '{0}|{1}|{2}' -f $properties.Title, $properties.Artist,
         $properties.AlbumTitle
-    return [pscustomobject]@{ State = $status; Key = $key; Properties = $properties }
+    return [pscustomobject]@{
+        State = $Playback.State; Key = $key; Properties = $properties
+        Session = $Playback.Session
+    }
+}
+
+function Get-MerrySpotifySnapshot {
+    return Get-MerrySpotifyTrack -Playback (Get-MerrySpotifyPlayback)
 }
 
 function ConvertTo-MerryAlbumBytes {

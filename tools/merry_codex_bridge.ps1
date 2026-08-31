@@ -6,6 +6,12 @@ param(
     [ValidateRange(1, 30)]
     [int]$PollSeconds = 2,
 
+    [ValidateRange(100, 2000)]
+    [int]$MediaPollMilliseconds = 250,
+
+    [ValidateRange(1, 30)]
+    [int]$MediaMissingGraceSeconds = 5,
+
     [ValidateRange(5, 60)]
     [int]$TtlSeconds = 12,
 
@@ -510,6 +516,7 @@ if ($TtlSeconds -le $PollSeconds + 3) {
 $lastLive = @{}
 $pulseState = $null
 $pulseUntil = [DateTime]::MinValue
+$state = 'Idle'
 $lastReportedState = $null
 $lastMediaState = 'None'
 $lastMediaEligible = $false
@@ -518,6 +525,16 @@ $cachedMediaKey = $null
 $cachedMediaBytes = $null
 $mediaWarning = $null
 $lastHostActive = $null
+$lastGoodPlayback = [pscustomobject]@{ State = 'None'; Session = $null }
+$missingSince = $null
+$trackSnapshot = [pscustomobject]@{ Key = $null; Properties = $null }
+$nextCodexPoll = [DateTime]::MinValue
+$nextMetadataPoll = [DateTime]::MinValue
+$nextHeartbeat = [DateTime]::MinValue
+$serialRetryAt = [DateTime]::MinValue
+$lastSentCodex = $null
+$lastSentMedia = $null
+$lastSentHost = $null
 
 try {
     if (-not $DryRun) {
@@ -526,138 +543,214 @@ try {
     }
 
     while ($true) {
-        $phase = 'codex'
-        try {
-            if ($null -eq $script:pipe -or -not $script:pipe.IsConnected) {
-                Connect-CodexPipe
-                Write-Host 'Codex Desktop status pipe connected.'
-            }
+        $now = [DateTime]::UtcNow
 
-            $tasks = @(Get-CodexTasks)
-            $attention = @($tasks | Where-Object status -In @(
-                'needs_attention', 'waitingOnApproval', 'waitingOnUserInput'
-            ))
-            $blocked = @($tasks | Where-Object status -In @('failed', 'error', 'systemError'))
-            $active = @($tasks | Where-Object status -EQ 'active')
-            $currentLive = @{}
-            foreach ($task in @($attention) + @($active)) {
-                $currentLive[$task.id] = $task.status
+        $rawPlayback = [pscustomobject]@{ State = 'None'; Session = $null }
+        if ($spotifyEnabled) {
+            try {
+                $rawPlayback = Get-MerrySpotifyPlayback
+                $mediaWarning = $null
             }
-
-            if ($blocked.Count -gt 0) {
-                $pulseState = 'Blocked'
-                $pulseUntil = [DateTime]::UtcNow.AddSeconds($FailureSeconds)
-                $state = 'Blocked'
-            }
-            elseif ($attention.Count -gt 0) {
-                $pulseState = $null
-                $state = 'NeedsInput'
-            }
-            elseif ($active.Count -gt 0) {
-                $pulseState = $null
-                $state = 'Running'
-            }
-            else {
-                $finished = @($lastLive.Keys | Where-Object { -not $currentLive.ContainsKey($_) })
-                if ($finished.Count -gt 0) {
-                    $outcome = 'Completed'
-                    foreach ($threadId in $finished) {
-                        if ((Get-LastTurnOutcome -ThreadId $threadId) -eq 'Blocked') {
-                            $outcome = 'Blocked'
-                            break
-                        }
-                    }
-                    $pulseState = $outcome
-                    $pulseUntil = [DateTime]::UtcNow.AddSeconds(
-                        $(if ($outcome -eq 'Blocked') { $FailureSeconds } else { $CompletedSeconds })
-                    )
+            catch {
+                if ($mediaWarning -ne $_.Exception.Message) {
+                    Write-Warning "Spotify media session unavailable: $($_.Exception.Message)"
+                    $mediaWarning = $_.Exception.Message
                 }
-                if ($null -ne $pulseState -and [DateTime]::UtcNow -lt $pulseUntil) {
-                    $state = $pulseState
+            }
+        }
+        $fastPlaybackChanged = $rawPlayback.State -in @('Playing', 'Paused') -and
+            $rawPlayback.State -ne $lastMediaState
+
+        if ($now -ge $nextCodexPoll -and -not $fastPlaybackChanged) {
+            try {
+                if ($null -eq $script:pipe -or -not $script:pipe.IsConnected) {
+                    Connect-CodexPipe
+                    Write-Host 'Codex Desktop status pipe connected.'
+                }
+                $tasks = @(Get-CodexTasks)
+                $attention = @($tasks | Where-Object status -In @(
+                    'needs_attention', 'waitingOnApproval', 'waitingOnUserInput'
+                ))
+                $blocked = @($tasks | Where-Object status -In @(
+                    'failed', 'error', 'systemError'
+                ))
+                $active = @($tasks | Where-Object status -EQ 'active')
+                $currentLive = @{}
+                foreach ($task in @($attention) + @($active)) {
+                    $currentLive[$task.id] = $task.status
+                }
+
+                if ($blocked.Count -gt 0) {
+                    $pulseState = 'Blocked'
+                    $pulseUntil = $now.AddSeconds($FailureSeconds)
+                    $state = 'Blocked'
+                }
+                elseif ($attention.Count -gt 0) {
+                    $pulseState = $null
+                    $state = 'NeedsInput'
+                }
+                elseif ($active.Count -gt 0) {
+                    $pulseState = $null
+                    $state = 'Running'
                 }
                 else {
-                    $pulseState = $null
-                    $state = 'Idle'
-                }
-            }
-            $lastLive = $currentLive
-
-            $snapshot = [pscustomobject]@{ State = 'None'; Key = $null; Properties = $null }
-            if ($spotifyEnabled) {
-                try {
-                    $snapshot = Get-MerrySpotifySnapshot
-                    $mediaWarning = $null
-                }
-                catch {
-                    if ($mediaWarning -ne $_.Exception.Message) {
-                        Write-Warning "Spotify media session unavailable: $($_.Exception.Message)"
-                        $mediaWarning = $_.Exception.Message
+                    $finished = @($lastLive.Keys | Where-Object {
+                        -not $currentLive.ContainsKey($_)
+                    })
+                    if ($finished.Count -gt 0) {
+                        $outcome = 'Completed'
+                        foreach ($threadId in $finished) {
+                            if ((Get-LastTurnOutcome -ThreadId $threadId) -eq 'Blocked') {
+                                $outcome = 'Blocked'
+                                break
+                            }
+                        }
+                        $pulseState = $outcome
+                        $pulseUntil = $now.AddSeconds(
+                            $(if ($outcome -eq 'Blocked') {
+                                $FailureSeconds
+                            } else {
+                                $CompletedSeconds
+                            })
+                        )
+                    }
+                    if ($null -ne $pulseState -and $now -lt $pulseUntil) {
+                        $state = $pulseState
+                    } else {
+                        $pulseState = $null
+                        $state = 'Idle'
                     }
                 }
+                $lastLive = $currentLive
             }
-            $mediaEligible = $snapshot.State -in @('Playing', 'Paused') -and
-                $state -ne 'Running'
-            $hostActive = $state -ne 'Idle' -or $snapshot.State -eq 'Playing'
-            if ($windowsDesktop -and -not $hostActive) {
-                $hostActive = [MerryHostActivity]::IdleMilliseconds() -le
-                    [uint32]($HostActivitySeconds * 1000)
+            catch {
+                Write-Warning "Codex status unavailable: $($_.Exception.Message)"
+                Disconnect-CodexPipe
+                if ($Once) { throw }
             }
+            $nextCodexPoll = [DateTime]::UtcNow.AddSeconds($PollSeconds)
+        }
 
-            if ($state -ne $lastReportedState) {
-                Write-Host ('{0:HH:mm:ss}  Codex pet: {1}' -f [DateTime]::Now, $state)
-                $lastReportedState = $state
+        $now = [DateTime]::UtcNow
+
+        if ($rawPlayback.State -in @('Playing', 'Paused')) {
+            $lastGoodPlayback = $rawPlayback
+            $missingSince = $null
+            $playback = $rawPlayback
+        } else {
+            if ($null -eq $missingSince -and
+                $lastGoodPlayback.State -in @('Playing', 'Paused')) {
+                $missingSince = $now
             }
-            if ($snapshot.State -ne $lastMediaState) {
-                Write-Host ('{0:HH:mm:ss}  Spotify: {1}' -f [DateTime]::Now, $snapshot.State)
-                $lastMediaState = $snapshot.State
+            if ($null -ne $missingSince -and
+                $now -lt $missingSince.AddSeconds($MediaMissingGraceSeconds)) {
+                $playback = $lastGoodPlayback
+            } else {
+                $playback = [pscustomobject]@{ State = 'None'; Session = $null }
+                $trackSnapshot = [pscustomobject]@{ Key = $null; Properties = $null }
             }
-            if ($hostActive -ne $lastHostActive) {
-                Write-Host ('{0:HH:mm:ss}  Host activity: {1}' -f [DateTime]::Now,
-                    $(if ($hostActive) { 'Active' } else { 'AFK' }))
-                $lastHostActive = $hostActive
+        }
+
+        $playbackChanged = $playback.State -ne $lastMediaState
+        if ($rawPlayback.State -in @('Playing', 'Paused') -and
+            $now -ge $nextMetadataPoll -and -not $playbackChanged) {
+            try {
+                $freshTrack = Get-MerrySpotifyTrack -Playback $rawPlayback
+                if ($null -ne $freshTrack.Key) {
+                    $trackSnapshot = $freshTrack
+                }
             }
-            if (-not $DryRun) {
-                $phase = 'serial'
+            catch {
+                if ($mediaWarning -ne $_.Exception.Message) {
+                    Write-Warning "Spotify metadata unavailable: $($_.Exception.Message)"
+                    $mediaWarning = $_.Exception.Message
+                }
+            }
+            $nextMetadataPoll = [DateTime]::UtcNow.AddSeconds(1)
+        }
+
+        $snapshot = [pscustomobject]@{
+            State = $playback.State
+            Key = $trackSnapshot.Key
+            Properties = $trackSnapshot.Properties
+        }
+        $mediaEligible = $snapshot.State -in @('Playing', 'Paused') -and
+            $state -ne 'Running'
+        $hostActive = $state -ne 'Idle' -or $snapshot.State -eq 'Playing'
+        if ($windowsDesktop -and -not $hostActive) {
+            $hostActive = [MerryHostActivity]::IdleMilliseconds() -le
+                [uint32]($HostActivitySeconds * 1000)
+        }
+
+        if ($state -ne $lastReportedState) {
+            Write-Host ('{0:HH:mm:ss.fff}  Codex pet: {1}' -f [DateTime]::Now, $state)
+            $lastReportedState = $state
+        }
+        if ($snapshot.State -ne $lastMediaState) {
+            Write-Host ('{0:HH:mm:ss.fff}  Spotify: {1}' -f [DateTime]::Now, $snapshot.State)
+            $lastMediaState = $snapshot.State
+        }
+        if ($hostActive -ne $lastHostActive) {
+            Write-Host ('{0:HH:mm:ss.fff}  Host activity: {1}' -f [DateTime]::Now,
+                $(if ($hostActive) { 'Active' } else { 'AFK' }))
+            $lastHostActive = $hostActive
+        }
+
+        if (-not $DryRun -and $now -ge $serialRetryAt) {
+            try {
                 if ($null -eq $script:serial -or -not $script:serial.IsOpen) {
                     Connect-Dongle
                     Write-Host "Merry dongle reconnected on $script:selectedPort."
+                    $lastSentCodex = $null
+                    $lastSentMedia = $null
+                    $lastSentHost = $null
+                    $lastMediaEligible = $false
+                    $lastUploadedMediaKey = $null
                 }
-                Invoke-DongleState -Serial $script:serial -State $state
-                if ($mediaEligible -and
+                $heartbeatDue = $now -ge $nextHeartbeat
+                if ($heartbeatDue -or $state -ne $lastSentCodex) {
+                    Invoke-DongleState -Serial $script:serial -State $state
+                    $lastSentCodex = $state
+                }
+                if ($mediaEligible -and $null -ne $snapshot.Key -and
                     ($snapshot.Key -ne $lastUploadedMediaKey -or -not $lastMediaEligible)) {
                     if ($snapshot.Key -ne $cachedMediaKey -or $null -eq $cachedMediaBytes) {
                         $cachedMediaBytes = ConvertTo-MerryAlbumBytes -Snapshot $snapshot
                         $cachedMediaKey = $snapshot.Key
                     }
-                    Write-Host ('{0:HH:mm:ss}  Uploading Spotify album artwork...' -f [DateTime]::Now)
+                    Write-Host ('{0:HH:mm:ss.fff}  Uploading Spotify album artwork...' -f
+                        [DateTime]::Now)
                     Invoke-DongleMediaUpload -Serial $script:serial -Image $cachedMediaBytes `
                         -State $snapshot.State
                     $lastUploadedMediaKey = $snapshot.Key
-                    Write-Host ('{0:HH:mm:ss}  Spotify album artwork ready.' -f [DateTime]::Now)
+                    Write-Host ('{0:HH:mm:ss.fff}  Spotify album artwork ready.' -f
+                        [DateTime]::Now)
                 }
-                Invoke-DongleMediaState -Serial $script:serial -State $snapshot.State
-                Invoke-DongleHostActivity -Serial $script:serial -Active $hostActive
+                if ($heartbeatDue -or $snapshot.State -ne $lastSentMedia) {
+                    Invoke-DongleMediaState -Serial $script:serial -State $snapshot.State
+                    $lastSentMedia = $snapshot.State
+                }
+                if ($heartbeatDue -or $hostActive -ne $lastSentHost) {
+                    Invoke-DongleHostActivity -Serial $script:serial -Active $hostActive
+                    $lastSentHost = $hostActive
+                }
+                if ($heartbeatDue) {
+                    $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($PollSeconds)
+                }
+                $lastMediaEligible = $mediaEligible
             }
-            $lastMediaEligible = $mediaEligible
-
-            if ($Once) {
-                break
-            }
-            Start-Sleep -Seconds $PollSeconds
-        }
-        catch {
-            Write-Warning $_.Exception.Message
-            if ($phase -eq 'codex') {
-                Disconnect-CodexPipe
-            }
-            elseif (-not $DryRun) {
+            catch {
+                Write-Warning "Dongle serial unavailable: $($_.Exception.Message)"
                 Disconnect-Dongle
+                $serialRetryAt = [DateTime]::UtcNow.AddSeconds(2)
+                if ($Once) { throw }
             }
-            if ($Once) {
-                throw
-            }
-            Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
+        } else {
+            $lastMediaEligible = $mediaEligible
         }
+
+        if ($Once) { break }
+        Start-Sleep -Milliseconds $MediaPollMilliseconds
     }
 }
 finally {
