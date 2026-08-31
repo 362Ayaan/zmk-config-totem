@@ -257,11 +257,13 @@ static bool media_should_show(void) {
     const uint8_t codex = (uint8_t)atomic_get(&codex_animation_id);
     const uint8_t media = (uint8_t)atomic_get(&media_state);
 
-    if (!atomic_get(&media_valid) || media == MERRY_MEDIA_NONE ||
-        codex == MERRY_ANIM_RUNNING) {
-        return false;
-    }
-    return media == MERRY_MEDIA_PLAYING || codex == MERRY_ANIM_IDLE;
+    /* Keep this priority rule identical to Test-MerryMediaEligible in the
+     * Windows bridge.  In particular, paused artwork remains visible after a
+     * Completed/NeedsInput/Blocked Codex state.  Falling through to show_pet()
+     * would decode a pet frame into the shared render buffer, permanently
+     * discarding the album until the host performs another full upload. */
+    return atomic_get(&media_valid) && codex != MERRY_ANIM_RUNNING &&
+           (media == MERRY_MEDIA_PLAYING || media == MERRY_MEDIA_PAUSED);
 }
 
 static void show_pet(void);
