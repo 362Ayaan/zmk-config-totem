@@ -15,6 +15,9 @@ param(
     [ValidateRange(1, 120)]
     [int]$FailureSeconds = 20,
 
+    [ValidateRange(5, 300)]
+    [int]$HostActivitySeconds = 30,
+
     [switch]$DryRun,
     [switch]$Once,
     [switch]$SelfTest,
@@ -24,13 +27,13 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$spotifyEnabled = -not $DisableSpotify -and
-    [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
-if ($spotifyEnabled -and $PSVersionTable.PSEdition -ne 'Desktop') {
+$windowsDesktop = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
+    $PSVersionTable.PSEdition -eq 'Desktop'
+$spotifyEnabled = -not $DisableSpotify -and $windowsDesktop
+if (-not $DisableSpotify -and -not $windowsDesktop) {
     Write-Warning 'Spotify artwork requires Windows PowerShell 5.1; Spotify support is disabled in this host.'
-    $spotifyEnabled = $false
 }
-if ($spotifyEnabled) {
+if ($windowsDesktop) {
     . (Join-Path $PSScriptRoot 'merry_media_helpers.ps1')
 }
 
@@ -73,6 +76,8 @@ $mediaChunkMagic = [uint32]0x3143414d    # MAC1
 $mediaResponseMagic = [uint32]0x3152414d # MAR1
 $mediaStateMagic = [uint32]0x31534d4d    # MMS1
 $mediaStateResponseMagic = [uint32]0x31414d4d # MMA1
+$hostStateMagic = [uint32]0x3153484d        # MHS1
+$hostStateResponseMagic = [uint32]0x3141484d # MHA1
 $mediaProtocolVersion = [byte]1
 $mediaWidth = [uint16]202
 $mediaHeight = [uint16]220
@@ -82,6 +87,7 @@ $script:requestId = 0
 $script:sequence = [uint16]0
 $script:mediaSequence = [uint16]0
 $script:mediaGeneration = [uint32]0
+$script:hostSequence = [uint16]0
 $script:pipe = $null
 $script:toolCatalog = @{}
 $script:serial = $null
@@ -407,6 +413,38 @@ function Invoke-DongleMediaState {
     $script:mediaSequence = [uint16](($script:mediaSequence + 1) -band 0xffff)
 }
 
+function Invoke-DongleHostActivity {
+    param([System.IO.Ports.SerialPort]$Serial, [bool]$Active)
+
+    $body = [byte[]]::new(8)
+    $body[0] = $mediaProtocolVersion
+    $body[1] = if ($Active) { [byte]1 } else { [byte]0 }
+    [BitConverter]::GetBytes($script:hostSequence).CopyTo($body, 2)
+    [BitConverter]::GetBytes([uint32]($TtlSeconds * 1000)).CopyTo($body, 4)
+    $request = [byte[]]::new(16)
+    [BitConverter]::GetBytes($hostStateMagic).CopyTo($request, 0)
+    $body.CopyTo($request, 4)
+    [BitConverter]::GetBytes([MerryCodexCrc32]::Compute($body)).CopyTo($request, 12)
+
+    $Serial.Write($request, 0, $request.Length)
+    $response = [byte[]]::new(8)
+    $offset = 0
+    while ($offset -lt $response.Length) {
+        $offset += $Serial.Read($response, $offset, $response.Length - $offset)
+    }
+    $magic = [BitConverter]::ToUInt32($response, 0)
+    $status = $response[4]
+    $applied = $response[5]
+    $sequence = [BitConverter]::ToUInt16($response, 6)
+    $expected = if ($Active) { 1 } else { 0 }
+    if ($magic -ne $hostStateResponseMagic -or $status -ne 0 -or
+        $sequence -ne $script:hostSequence -or $applied -ne $expected) {
+        throw ('Invalid host-activity acknowledgement: magic=0x{0:x8}, status={1}, active={2}, sequence={3}.' -f
+            $magic, $status, $applied, $sequence)
+    }
+    $script:hostSequence = [uint16](($script:hostSequence + 1) -band 0xffff)
+}
+
 function Connect-Dongle {
     Disconnect-Dongle
     $candidates = @(Get-DongleCandidates)
@@ -454,6 +492,9 @@ function Invoke-SelfTest {
         $mediaStateIds.Paused -ne 2) {
         throw 'Media protocol self-test failed.'
     }
+    if ($hostStateMagic -ne [uint32]0x3153484d -or $HostActivitySeconds -lt 5) {
+        throw 'Host-activity protocol self-test failed.'
+    }
     Write-Host 'Merry Codex bridge self-test passed.'
 }
 
@@ -476,6 +517,7 @@ $lastUploadedMediaKey = $null
 $cachedMediaKey = $null
 $cachedMediaBytes = $null
 $mediaWarning = $null
+$lastHostActive = $null
 
 try {
     if (-not $DryRun) {
@@ -553,9 +595,13 @@ try {
                     }
                 }
             }
-            $urgentCodex = $state -in @('NeedsInput', 'Blocked')
-            $mediaEligible = ($snapshot.State -eq 'Playing' -and -not $urgentCodex) -or
-                ($snapshot.State -eq 'Paused' -and $state -eq 'Idle')
+            $mediaEligible = $snapshot.State -in @('Playing', 'Paused') -and
+                $state -ne 'Running'
+            $hostActive = $state -ne 'Idle' -or $snapshot.State -eq 'Playing'
+            if ($windowsDesktop -and -not $hostActive) {
+                $hostActive = [MerryHostActivity]::IdleMilliseconds() -le
+                    [uint32]($HostActivitySeconds * 1000)
+            }
 
             if ($state -ne $lastReportedState) {
                 Write-Host ('{0:HH:mm:ss}  Codex pet: {1}' -f [DateTime]::Now, $state)
@@ -564,6 +610,11 @@ try {
             if ($snapshot.State -ne $lastMediaState) {
                 Write-Host ('{0:HH:mm:ss}  Spotify: {1}' -f [DateTime]::Now, $snapshot.State)
                 $lastMediaState = $snapshot.State
+            }
+            if ($hostActive -ne $lastHostActive) {
+                Write-Host ('{0:HH:mm:ss}  Host activity: {1}' -f [DateTime]::Now,
+                    $(if ($hostActive) { 'Active' } else { 'AFK' }))
+                $lastHostActive = $hostActive
             }
             if (-not $DryRun) {
                 $phase = 'serial'
@@ -585,6 +636,7 @@ try {
                     Write-Host ('{0:HH:mm:ss}  Spotify album artwork ready.' -f [DateTime]::Now)
                 }
                 Invoke-DongleMediaState -Serial $script:serial -State $snapshot.State
+                Invoke-DongleHostActivity -Serial $script:serial -Active $hostActive
             }
             $lastMediaEligible = $mediaEligible
 

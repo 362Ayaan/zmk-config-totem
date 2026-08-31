@@ -22,7 +22,7 @@ public static class MerryAlbumRenderer
     private const int ArtTop = 9;
     private const int ArtSize = 202;
 
-    public static byte[] Render(Stream source, bool playing)
+    public static byte[] Render(Stream source)
     {
         using (Image original = Image.FromStream(source, true, true))
         using (Bitmap canvas = new Bitmap(Width, Height, PixelFormat.Format24bppRgb))
@@ -40,32 +40,6 @@ public static class MerryAlbumRenderer
             int sourceY = (original.Height - crop) / 2;
             graphics.DrawImage(original, new Rectangle(0, ArtTop, ArtSize, ArtSize),
                 sourceX, sourceY, crop, crop, GraphicsUnit.Pixel);
-
-            graphics.CompositingMode = CompositingMode.SourceOver;
-            const int circleSize = 46;
-            const int circleX = 148;
-            const int circleY = 158;
-            using (Brush shadow = new SolidBrush(Color.FromArgb(205, 0, 0, 0)))
-            using (Pen edge = new Pen(Color.FromArgb(210, 255, 255, 255), 2.0f))
-            using (Brush glyph = new SolidBrush(Color.White))
-            {
-                graphics.FillEllipse(shadow, circleX, circleY, circleSize, circleSize);
-                graphics.DrawEllipse(edge, circleX + 1, circleY + 1, circleSize - 2, circleSize - 2);
-                if (playing)
-                {
-                    graphics.FillRectangle(glyph, circleX + 15, circleY + 13, 6, 20);
-                    graphics.FillRectangle(glyph, circleX + 26, circleY + 13, 6, 20);
-                }
-                else
-                {
-                    Point[] triangle = {
-                        new Point(circleX + 17, circleY + 12),
-                        new Point(circleX + 17, circleY + 34),
-                        new Point(circleX + 34, circleY + 23)
-                    };
-                    graphics.FillPolygon(glyph, triangle);
-                }
-            }
 
             Rectangle bounds = new Rectangle(0, 0, Width, Height);
             BitmapData data = canvas.LockBits(bounds, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
@@ -97,6 +71,28 @@ public static class MerryAlbumRenderer
                 canvas.UnlockBits(data);
             }
         }
+    }
+}
+
+public static class MerryHostActivity
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LASTINPUTINFO
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+
+    public static uint IdleMilliseconds()
+    {
+        LASTINPUTINFO info = new LASTINPUTINFO();
+        info.cbSize = (uint)Marshal.SizeOf(info);
+        if (!GetLastInputInfo(ref info))
+            throw new InvalidOperationException("GetLastInputInfo failed.");
+        return unchecked((uint)Environment.TickCount - info.dwTime);
     }
 }
 '@
@@ -153,8 +149,8 @@ function Get-MerrySpotifySnapshot {
     if ($null -eq $properties.Thumbnail) {
         return [pscustomobject]@{ State = 'None'; Key = $null; Properties = $null }
     }
-    $key = '{0}|{1}|{2}|{3}' -f $properties.Title, $properties.Artist,
-        $properties.AlbumTitle, $status
+    $key = '{0}|{1}|{2}' -f $properties.Title, $properties.Artist,
+        $properties.AlbumTitle
     return [pscustomobject]@{ State = $status; Key = $key; Properties = $properties }
 }
 
@@ -166,7 +162,7 @@ function ConvertTo-MerryAlbumBytes {
     )
     $dotNetStream = $script:merryAsStreamMethod.Invoke($null, @($winRtStream))
     try {
-        return ,[MerryAlbumRenderer]::Render($dotNetStream, $Snapshot.State -eq 'Playing')
+        return ,[MerryAlbumRenderer]::Render($dotNetStream)
     }
     finally {
         $dotNetStream.Dispose()
@@ -175,4 +171,3 @@ function ConvertTo-MerryAlbumBytes {
         }
     }
 }
-

@@ -3,6 +3,7 @@
 #include "pet_store.h"
 #include "merry_config.h"
 #include "merry_codex_state.h"
+#include "merry_host_activity.h"
 #include "merry_media.h"
 
 #include <errno.h>
@@ -32,6 +33,8 @@
 #define MEDIA_RESPONSE_MAGIC 0x3152414du /* MAR1 */
 #define MEDIA_STATE_MAGIC 0x31534d4du /* MMS1 */
 #define MEDIA_STATE_RESPONSE_MAGIC 0x31414d4du /* MMA1 */
+#define HOST_STATE_MAGIC 0x3153484du /* MHS1 */
+#define HOST_STATE_RESPONSE_MAGIC 0x3141484du /* MHA1 */
 #define UPLOAD_CHUNK_SIZE 512u
 #define UPLOAD_READY_SEQUENCE 0xffffu
 #define UPLOAD_FINAL_SEQUENCE 0xfffeu
@@ -88,6 +91,12 @@ enum media_status {
     MEDIA_WRITE_FAILED = 6,
     MEDIA_FINALIZE_FAILED = 7,
     MEDIA_BAD_STATE = 8,
+};
+
+enum host_status {
+    HOST_OK = 0,
+    HOST_BAD_HEADER = 1,
+    HOST_BAD_CRC = 2,
 };
 
 struct upload_header {
@@ -165,6 +174,21 @@ struct media_state_response {
     uint16_t sequence;
 } __packed;
 
+struct host_state_request {
+    uint8_t version;
+    uint8_t active;
+    uint16_t sequence;
+    uint32_t ttl_ms;
+    uint32_t crc32;
+} __packed;
+
+struct host_state_response {
+    uint32_t magic;
+    uint8_t status;
+    uint8_t active;
+    uint16_t sequence;
+} __packed;
+
 BUILD_ASSERT(DT_NODE_HAS_STATUS(MERRY_UART_NODE, okay), "Merry CDC UART alias is not ready");
 BUILD_ASSERT(sizeof(struct upload_header) == 12u, "upload header layout changed");
 BUILD_ASSERT(sizeof(struct chunk_header) == 8u, "chunk header layout changed");
@@ -177,6 +201,8 @@ BUILD_ASSERT(sizeof(struct codex_state_response) == 8u, "Codex response layout c
 BUILD_ASSERT(sizeof(struct media_upload_header) == 20u, "media upload header layout changed");
 BUILD_ASSERT(sizeof(struct media_state_request) == 12u, "media state request layout changed");
 BUILD_ASSERT(sizeof(struct media_state_response) == 8u, "media state response layout changed");
+BUILD_ASSERT(sizeof(struct host_state_request) == 12u, "host state request layout changed");
+BUILD_ASSERT(sizeof(struct host_state_response) == 8u, "host state response layout changed");
 
 static const struct device *const upload_uart = DEVICE_DT_GET(MERRY_UART_NODE);
 
@@ -230,7 +256,8 @@ static int wait_for_command(uint32_t *command) {
         window = (window >> 8) | ((uint32_t)byte << 24);
         if (window == UPLOAD_MAGIC || window == CONFIG_MAGIC || window == STORE_STATUS_MAGIC ||
             window == STORE_CLEAR_MAGIC || window == CODEX_STATE_MAGIC ||
-            window == MEDIA_UPLOAD_MAGIC || window == MEDIA_STATE_MAGIC) {
+            window == MEDIA_UPLOAD_MAGIC || window == MEDIA_STATE_MAGIC ||
+            window == HOST_STATE_MAGIC) {
             *command = window;
             return 0;
         }
@@ -250,6 +277,13 @@ static void media_expire_work_callback(struct k_work *work) {
 }
 
 K_WORK_DELAYABLE_DEFINE(media_expire_work, media_expire_work_callback);
+
+static void host_expire_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+    merry_host_activity_set(false);
+}
+
+K_WORK_DELAYABLE_DEFINE(host_expire_work, host_expire_work_callback);
 
 static void send_codex_response(enum codex_status status, uint16_t sequence) {
     const struct codex_state_response response = {
@@ -318,6 +352,42 @@ static void handle_media_state_request(void) {
     }
     k_work_reschedule(&media_expire_work, K_MSEC(request.ttl_ms));
     send_media_state_response(MEDIA_OK, request.sequence);
+}
+
+static void send_host_state_response(enum host_status status, uint16_t sequence) {
+    const struct host_state_response response = {
+        .magic = HOST_STATE_RESPONSE_MAGIC,
+        .status = status,
+        .active = merry_host_activity_get() ? 1u : 0u,
+        .sequence = sequence,
+    };
+    const uint8_t *bytes = (const uint8_t *)&response;
+    for (size_t index = 0; index < sizeof(response); index++) {
+        uart_poll_out(upload_uart, bytes[index]);
+    }
+}
+
+static void handle_host_state_request(void) {
+    struct host_state_request request = {};
+    if (read_exact(&request, sizeof(request)) < 0 ||
+        request.version != MEDIA_PROTOCOL_VERSION || request.active > 1u ||
+        request.ttl_ms < CODEX_MIN_TTL_MS || request.ttl_ms > CODEX_MAX_TTL_MS) {
+        send_host_state_response(HOST_BAD_HEADER, request.sequence);
+        return;
+    }
+    if (pet_crc32((const uint8_t *)&request, offsetof(struct host_state_request, crc32)) !=
+        request.crc32) {
+        send_host_state_response(HOST_BAD_CRC, request.sequence);
+        return;
+    }
+
+    merry_host_activity_set(request.active != 0u);
+    if (request.active != 0u) {
+        k_work_reschedule(&host_expire_work, K_MSEC(request.ttl_ms));
+    } else {
+        (void)k_work_cancel_delayable(&host_expire_work);
+    }
+    send_host_state_response(HOST_OK, request.sequence);
 }
 
 static void send_response(uint16_t sequence, enum upload_status status) {
@@ -493,6 +563,10 @@ static void upload_thread(void *unused1, void *unused2, void *unused3) {
         }
         if (command == MEDIA_UPLOAD_MAGIC) {
             handle_media_upload(chunk, sizeof(chunk));
+            continue;
+        }
+        if (command == HOST_STATE_MAGIC) {
+            handle_host_state_request();
             continue;
         }
 

@@ -28,6 +28,7 @@
 
 #include "merry_config.h"
 #include "merry_codex_state.h"
+#include "merry_host_activity.h"
 #include "merry_media.h"
 #include "pet_store.h"
 
@@ -60,6 +61,8 @@ static lv_obj_t *dashboard_mod_caption;
 static lv_obj_t *dashboard_modifiers;
 static lv_obj_t *dashboard_rule;
 static lv_obj_t *pet_image;
+static lv_obj_t *media_badge;
+static lv_obj_t *media_glyph;
 
 static lv_style_t screen_style;
 static lv_style_t battery_style;
@@ -68,6 +71,8 @@ static lv_style_t layer_badge_style;
 static lv_style_t layer_style;
 static lv_style_t modifier_style;
 static lv_style_t rule_style;
+static lv_style_t media_badge_style;
+static lv_style_t media_glyph_style;
 
 static uint8_t packed_frame[PET_FRAME_PACKED_BYTES] __aligned(4);
 /* The QSPI pack stores the native 192x208 art. Decode directly into a larger
@@ -101,6 +106,7 @@ static atomic_t requested_mode = ATOMIC_INIT(ZMK_ACTIVITY_ACTIVE);
 static atomic_t codex_animation_id = ATOMIC_INIT(MERRY_ANIM_IDLE);
 static atomic_t media_state = ATOMIC_INIT(MERRY_MEDIA_NONE);
 static atomic_t media_valid = ATOMIC_INIT(0);
+static atomic_t host_active = ATOMIC_INIT(0);
 K_SEM_DEFINE(media_ui_sync, 0, 1);
 
 static uint8_t packed_palette_index(uint32_t source_pixel) {
@@ -130,6 +136,11 @@ static void set_dashboard_visible(bool visible) {
     set_hidden(dashboard_mod_caption, !visible);
     set_hidden(dashboard_modifiers, !visible);
     set_hidden(dashboard_rule, !visible);
+}
+
+static void set_media_overlay_visible(bool visible) {
+    set_hidden(media_badge, !visible);
+    set_hidden(media_glyph, !visible);
 }
 
 static void set_screen_power(bool on) {
@@ -228,8 +239,7 @@ static bool media_should_show(void) {
     const uint8_t media = (uint8_t)atomic_get(&media_state);
 
     if (!atomic_get(&media_valid) || media == MERRY_MEDIA_NONE ||
-        codex == MERRY_ANIM_NEEDS_INPUT ||
-        codex == MERRY_ANIM_BLOCKED) {
+        codex == MERRY_ANIM_RUNNING) {
         return false;
     }
     return media == MERRY_MEDIA_PLAYING || codex == MERRY_ANIM_IDLE;
@@ -246,7 +256,13 @@ static void show_media(void) {
         lv_timer_pause(pet_timer);
     }
     set_hidden(pet_image, false);
+    lv_label_set_text(media_glyph,
+                      atomic_get(&media_state) == MERRY_MEDIA_PLAYING ? LV_SYMBOL_PAUSE
+                                                                      : LV_SYMBOL_PLAY);
+    set_media_overlay_visible(true);
     lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
+    lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
     lv_obj_invalidate(pet_image);
 }
 
@@ -313,6 +329,7 @@ static void media_upload_begin_work_callback(struct k_work *work) {
     }
     if (pet_mode) {
         set_hidden(pet_image, true);
+        set_media_overlay_visible(false);
     }
     media_mode = false;
     atomic_clear(&media_valid);
@@ -388,6 +405,7 @@ static void show_dashboard(void) {
         lv_timer_pause(pet_timer);
     }
     set_hidden(pet_image, true);
+    set_media_overlay_visible(false);
     set_dashboard_visible(true);
 }
 
@@ -397,7 +415,10 @@ static void show_pet(void) {
     set_screen_power(true);
     set_dashboard_visible(false);
     set_hidden(pet_image, false);
+    set_media_overlay_visible(false);
     lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
+    lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
     refresh_pet_animation();
     if (pet_timer != NULL) {
         lv_timer_resume(pet_timer);
@@ -408,7 +429,7 @@ static void screen_off_ui_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
     if (ui_config.display_mode == MERRY_DISPLAY_AUTO && pet_mode &&
         atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
-        zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
+        zmk_activity_get_state() == ZMK_ACTIVITY_IDLE && !atomic_get(&host_active)) {
         set_screen_power(false);
     }
 }
@@ -425,6 +446,42 @@ static void screen_off_delay_callback(struct k_work *work) {
 }
 
 K_WORK_DELAYABLE_DEFINE(screen_off_delay_work, screen_off_delay_callback);
+
+static void host_activity_apply_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    if (!ui_initialized || ui_config.display_mode != MERRY_DISPLAY_AUTO ||
+        zmk_activity_get_state() == ZMK_ACTIVITY_ACTIVE ||
+        atomic_get(&requested_mode) == ZMK_ACTIVITY_ACTIVE) {
+        return;
+    }
+
+    if (atomic_get(&host_active)) {
+        if (!screen_is_on) {
+            show_idle_content();
+        }
+        if (pet_mode) {
+            k_work_reschedule(&screen_off_delay_work,
+                              K_MSEC(CONFIG_MERRY_SCREEN_OFF_DELAY_MS));
+        }
+    }
+}
+
+K_WORK_DEFINE(host_activity_apply_work, host_activity_apply_work_callback);
+
+bool merry_host_activity_get(void) {
+    return atomic_get(&host_active) != 0;
+}
+
+void merry_host_activity_set(bool active) {
+    atomic_val_t previous = atomic_set(&host_active, active ? 1 : 0);
+    if (((previous != 0) != active || active) && ui_initialized &&
+        zmk_display_is_initialized()) {
+        /* Every active heartbeat moves the AFK deadline forward without
+         * waking the dashboard or pretending the split keyboard was used. */
+        k_work_submit_to_queue(zmk_display_work_q(), &host_activity_apply_work);
+    }
+}
 
 static void pet_delay_ui_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
@@ -469,6 +526,8 @@ static void config_apply_work_callback(struct k_work *work) {
     (void)k_work_cancel_delayable(&pet_delay_work);
     (void)k_work_cancel_delayable(&screen_off_delay_work);
     lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
+    lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
 
     switch (ui_config.display_mode) {
     case MERRY_DISPLAY_DASHBOARD:
@@ -673,6 +732,20 @@ static void init_styles(void) {
     lv_style_set_bg_opa(&rule_style, LV_OPA_COVER);
     lv_style_set_border_width(&rule_style, 0);
     lv_style_set_radius(&rule_style, 1);
+
+    lv_style_init(&media_badge_style);
+    lv_style_set_bg_color(&media_badge_style, lv_color_hex(0x000000));
+    lv_style_set_bg_opa(&media_badge_style, LV_OPA_80);
+    lv_style_set_border_color(&media_badge_style, lv_color_hex(0xffffff));
+    lv_style_set_border_opa(&media_badge_style, LV_OPA_80);
+    lv_style_set_border_width(&media_badge_style, 2);
+    lv_style_set_radius(&media_badge_style, LV_RADIUS_CIRCLE);
+    lv_style_set_pad_all(&media_badge_style, 0);
+
+    lv_style_init(&media_glyph_style);
+    lv_style_set_text_font(&media_glyph_style, &lv_font_montserrat_20);
+    lv_style_set_text_color(&media_glyph_style, lv_color_hex(0xffffff));
+    lv_style_set_bg_opa(&media_glyph_style, LV_OPA_TRANSP);
 }
 
 lv_obj_t *zmk_display_status_screen(void) {
@@ -694,9 +767,12 @@ lv_obj_t *zmk_display_status_screen(void) {
     dashboard_modifiers = lv_label_create(screen);
     dashboard_rule = lv_obj_create(screen);
     pet_image = lv_image_create(screen);
+    media_badge = lv_obj_create(screen);
+    media_glyph = lv_label_create(screen);
     if (dashboard_battery == NULL || dashboard_layer_caption == NULL ||
         dashboard_layer_badge == NULL || dashboard_layer == NULL || dashboard_mod_caption == NULL ||
-        dashboard_modifiers == NULL || dashboard_rule == NULL || pet_image == NULL) {
+        dashboard_modifiers == NULL || dashboard_rule == NULL || pet_image == NULL ||
+        media_badge == NULL || media_glyph == NULL) {
         lv_obj_del(screen);
         return NULL;
     }
@@ -708,6 +784,8 @@ lv_obj_t *zmk_display_status_screen(void) {
     lv_obj_add_style(dashboard_mod_caption, &caption_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_modifiers, &modifier_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_rule, &rule_style, LV_PART_MAIN);
+    lv_obj_add_style(media_badge, &media_badge_style, LV_PART_MAIN);
+    lv_obj_add_style(media_glyph, &media_glyph_style, LV_PART_MAIN);
 
     lv_label_set_text(dashboard_layer_caption, "LAYER");
     lv_obj_align(dashboard_layer_caption, LV_ALIGN_CENTER, 0, -48);
@@ -721,6 +799,10 @@ lv_obj_t *zmk_display_status_screen(void) {
     lv_image_set_src(pet_image, &pet_image_descriptor);
     lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
     set_hidden(pet_image, true);
+    lv_obj_set_size(media_badge, 46, 46);
+    lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    set_media_overlay_visible(false);
 
     pet_timer = lv_timer_create(pet_timer_callback, 250, NULL);
     if (pet_timer == NULL) {
