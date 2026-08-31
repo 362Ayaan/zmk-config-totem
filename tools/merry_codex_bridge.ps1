@@ -17,11 +17,22 @@ param(
 
     [switch]$DryRun,
     [switch]$Once,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [switch]$DisableSpotify
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$spotifyEnabled = -not $DisableSpotify -and
+    [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+if ($spotifyEnabled -and $PSVersionTable.PSEdition -ne 'Desktop') {
+    Write-Warning 'Spotify artwork requires Windows PowerShell 5.1; Spotify support is disabled in this host.'
+    $spotifyEnabled = $false
+}
+if ($spotifyEnabled) {
+    . (Join-Path $PSScriptRoot 'merry_media_helpers.ps1')
+}
 
 if (-not ('MerryCodexCrc32' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -57,8 +68,20 @@ $stateNames = @('Idle', 'Running', 'NeedsInput', 'Completed', 'Blocked')
 $codexStateMagic = [uint32]0x3153434d    # MCS1
 $codexResponseMagic = [uint32]0x3141434d # MCA1
 $codexStateVersion = [byte]1
+$mediaUploadMagic = [uint32]0x3155414d   # MAU1
+$mediaChunkMagic = [uint32]0x3143414d    # MAC1
+$mediaResponseMagic = [uint32]0x3152414d # MAR1
+$mediaStateMagic = [uint32]0x31534d4d    # MMS1
+$mediaStateResponseMagic = [uint32]0x31414d4d # MMA1
+$mediaProtocolVersion = [byte]1
+$mediaWidth = [uint16]202
+$mediaHeight = [uint16]220
+$mediaBytes = 202 * 220 * 2
+$mediaStateIds = @{ None = 0; Playing = 1; Paused = 2 }
 $script:requestId = 0
 $script:sequence = [uint16]0
+$script:mediaSequence = [uint16]0
+$script:mediaGeneration = [uint32]0
 $script:pipe = $null
 $script:toolCatalog = @{}
 $script:serial = $null
@@ -150,7 +173,7 @@ function Invoke-CodexPipeRequest {
         throw "Codex Desktop returned an invalid frame length: $responseLength."
     }
     $responseBytes = Read-Exact -Stream $script:pipe -Count $responseLength
-    $response = [Text.Encoding]::UTF8.GetString($responseBytes) | ConvertFrom-Json -Depth 60
+    $response = [Text.Encoding]::UTF8.GetString($responseBytes) | ConvertFrom-Json
     if ($response.PSObject.Properties.Name -contains 'error') {
         throw "Codex Desktop request failed: $($response.error.message)"
     }
@@ -197,7 +220,7 @@ function Invoke-CodexAppTool {
     if ($null -eq $text -or [string]::IsNullOrWhiteSpace($text.text)) {
         throw "Codex app tool '$Name' returned no JSON payload."
     }
-    return $text.text | ConvertFrom-Json -Depth 80
+    return $text.text | ConvertFrom-Json
 }
 
 function Get-CodexTasks {
@@ -285,6 +308,105 @@ function Invoke-DongleState {
     $script:sequence = [uint16](($script:sequence + 1) -band 0xffff)
 }
 
+function Read-MerryMediaResponse {
+    param(
+        [System.IO.Ports.SerialPort]$Serial,
+        [uint16]$ExpectedSequence
+    )
+
+    $response = [byte[]]::new(8)
+    $offset = 0
+    while ($offset -lt $response.Length) {
+        $offset += $Serial.Read($response, $offset, $response.Length - $offset)
+    }
+    $magic = [BitConverter]::ToUInt32($response, 0)
+    $sequence = [BitConverter]::ToUInt16($response, 4)
+    $status = [BitConverter]::ToUInt16($response, 6)
+    if ($magic -ne $mediaResponseMagic -or $sequence -ne $ExpectedSequence -or $status -ne 0) {
+        throw ('Invalid media acknowledgement: magic=0x{0:x8}, sequence={1}, status={2}.' -f
+            $magic, $sequence, $status)
+    }
+}
+
+function Invoke-DongleMediaUpload {
+    param(
+        [System.IO.Ports.SerialPort]$Serial,
+        [byte[]]$Image,
+        [string]$State
+    )
+
+    if ($Image.Length -ne $mediaBytes -or -not $mediaStateIds.ContainsKey($State) -or
+        $State -eq 'None') {
+        throw 'The media image or playback state is invalid.'
+    }
+    $script:mediaGeneration = [uint32](($script:mediaGeneration + 1) -band 0xffffffffL)
+    $imageCrc = [MerryCodexCrc32]::Compute($Image)
+    $request = [byte[]]::new(24)
+    [BitConverter]::GetBytes($mediaUploadMagic).CopyTo($request, 0)
+    $request[4] = $mediaProtocolVersion
+    $request[5] = [byte]$mediaStateIds[$State]
+    [BitConverter]::GetBytes($mediaWidth).CopyTo($request, 6)
+    [BitConverter]::GetBytes($mediaHeight).CopyTo($request, 8)
+    [BitConverter]::GetBytes([uint16]0).CopyTo($request, 10)
+    [BitConverter]::GetBytes([uint32]$Image.Length).CopyTo($request, 12)
+    [BitConverter]::GetBytes($imageCrc).CopyTo($request, 16)
+    [BitConverter]::GetBytes($script:mediaGeneration).CopyTo($request, 20)
+
+    $Serial.DiscardInBuffer()
+    $Serial.Write($request, 0, $request.Length)
+    Read-MerryMediaResponse -Serial $Serial -ExpectedSequence ([uint16]0xffff)
+
+    $offset = 0
+    $sequence = [uint16]0
+    while ($offset -lt $Image.Length) {
+        $size = [Math]::Min(512, $Image.Length - $offset)
+        $payload = [byte[]]::new($size)
+        [Array]::Copy($Image, $offset, $payload, 0, $size)
+        $packet = [byte[]]::new(12 + $size)
+        [BitConverter]::GetBytes($mediaChunkMagic).CopyTo($packet, 0)
+        [BitConverter]::GetBytes($sequence).CopyTo($packet, 4)
+        [BitConverter]::GetBytes([uint16]$size).CopyTo($packet, 6)
+        [BitConverter]::GetBytes([MerryCodexCrc32]::Compute($payload)).CopyTo($packet, 8)
+        $payload.CopyTo($packet, 12)
+        $Serial.Write($packet, 0, $packet.Length)
+        Read-MerryMediaResponse -Serial $Serial -ExpectedSequence $sequence
+        $offset += $size
+        $sequence = [uint16](($sequence + 1) -band 0xffff)
+    }
+    Read-MerryMediaResponse -Serial $Serial -ExpectedSequence ([uint16]0xfffe)
+}
+
+function Invoke-DongleMediaState {
+    param([System.IO.Ports.SerialPort]$Serial, [string]$State)
+
+    $body = [byte[]]::new(8)
+    $body[0] = $mediaProtocolVersion
+    $body[1] = [byte]$mediaStateIds[$State]
+    [BitConverter]::GetBytes($script:mediaSequence).CopyTo($body, 2)
+    [BitConverter]::GetBytes([uint32]($TtlSeconds * 1000)).CopyTo($body, 4)
+    $request = [byte[]]::new(16)
+    [BitConverter]::GetBytes($mediaStateMagic).CopyTo($request, 0)
+    $body.CopyTo($request, 4)
+    [BitConverter]::GetBytes([MerryCodexCrc32]::Compute($body)).CopyTo($request, 12)
+
+    $Serial.Write($request, 0, $request.Length)
+    $response = [byte[]]::new(8)
+    $offset = 0
+    while ($offset -lt $response.Length) {
+        $offset += $Serial.Read($response, $offset, $response.Length - $offset)
+    }
+    $magic = [BitConverter]::ToUInt32($response, 0)
+    $status = $response[4]
+    $appliedState = $response[5]
+    $sequence = [BitConverter]::ToUInt16($response, 6)
+    if ($magic -ne $mediaStateResponseMagic -or $status -ne 0 -or
+        $sequence -ne $script:mediaSequence -or $appliedState -ne $mediaStateIds[$State]) {
+        throw ('Invalid media-state acknowledgement: magic=0x{0:x8}, status={1}, state={2}, sequence={3}.' -f
+            $magic, $status, $appliedState, $sequence)
+    }
+    $script:mediaSequence = [uint16](($script:mediaSequence + 1) -band 0xffff)
+}
+
 function Connect-Dongle {
     Disconnect-Dongle
     $candidates = @(Get-DongleCandidates)
@@ -328,6 +450,10 @@ function Invoke-SelfTest {
     if ($stateIds.Count -ne 5 -or $stateNames[$stateIds.Blocked] -ne 'Blocked') {
         throw 'State mapping self-test failed.'
     }
+    if ($mediaBytes -ne 88880 -or $mediaStateIds.Playing -ne 1 -or
+        $mediaStateIds.Paused -ne 2) {
+        throw 'Media protocol self-test failed.'
+    }
     Write-Host 'Merry Codex bridge self-test passed.'
 }
 
@@ -344,6 +470,12 @@ $lastLive = @{}
 $pulseState = $null
 $pulseUntil = [DateTime]::MinValue
 $lastReportedState = $null
+$lastMediaState = 'None'
+$lastMediaEligible = $false
+$lastUploadedMediaKey = $null
+$cachedMediaKey = $null
+$cachedMediaBytes = $null
+$mediaWarning = $null
 
 try {
     if (-not $DryRun) {
@@ -408,9 +540,30 @@ try {
             }
             $lastLive = $currentLive
 
+            $snapshot = [pscustomobject]@{ State = 'None'; Key = $null; Properties = $null }
+            if ($spotifyEnabled) {
+                try {
+                    $snapshot = Get-MerrySpotifySnapshot
+                    $mediaWarning = $null
+                }
+                catch {
+                    if ($mediaWarning -ne $_.Exception.Message) {
+                        Write-Warning "Spotify media session unavailable: $($_.Exception.Message)"
+                        $mediaWarning = $_.Exception.Message
+                    }
+                }
+            }
+            $urgentCodex = $state -in @('NeedsInput', 'Blocked')
+            $mediaEligible = ($snapshot.State -eq 'Playing' -and -not $urgentCodex) -or
+                ($snapshot.State -eq 'Paused' -and $state -eq 'Idle')
+
             if ($state -ne $lastReportedState) {
                 Write-Host ('{0:HH:mm:ss}  Codex pet: {1}' -f [DateTime]::Now, $state)
                 $lastReportedState = $state
+            }
+            if ($snapshot.State -ne $lastMediaState) {
+                Write-Host ('{0:HH:mm:ss}  Spotify: {1}' -f [DateTime]::Now, $snapshot.State)
+                $lastMediaState = $snapshot.State
             }
             if (-not $DryRun) {
                 $phase = 'serial'
@@ -419,7 +572,21 @@ try {
                     Write-Host "Merry dongle reconnected on $script:selectedPort."
                 }
                 Invoke-DongleState -Serial $script:serial -State $state
+                if ($mediaEligible -and
+                    ($snapshot.Key -ne $lastUploadedMediaKey -or -not $lastMediaEligible)) {
+                    if ($snapshot.Key -ne $cachedMediaKey -or $null -eq $cachedMediaBytes) {
+                        $cachedMediaBytes = ConvertTo-MerryAlbumBytes -Snapshot $snapshot
+                        $cachedMediaKey = $snapshot.Key
+                    }
+                    Write-Host ('{0:HH:mm:ss}  Uploading Spotify album artwork...' -f [DateTime]::Now)
+                    Invoke-DongleMediaUpload -Serial $script:serial -Image $cachedMediaBytes `
+                        -State $snapshot.State
+                    $lastUploadedMediaKey = $snapshot.Key
+                    Write-Host ('{0:HH:mm:ss}  Spotify album artwork ready.' -f [DateTime]::Now)
+                }
+                Invoke-DongleMediaState -Serial $script:serial -State $snapshot.State
             }
+            $lastMediaEligible = $mediaEligible
 
             if ($Once) {
                 break

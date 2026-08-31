@@ -28,6 +28,7 @@
 
 #include "merry_config.h"
 #include "merry_codex_state.h"
+#include "merry_media.h"
 #include "pet_store.h"
 
 #define DISPLAY_NODE DT_CHOSEN(zephyr_display)
@@ -37,8 +38,8 @@
 #define BATTERY_RIGHT_SLOT 1u
 #define PET_SCREEN_WIDTH 240
 #define PET_SCREEN_HEIGHT 240
-#define PET_RENDER_WIDTH 202u
-#define PET_RENDER_HEIGHT 220u
+#define PET_RENDER_WIDTH MERRY_MEDIA_WIDTH
+#define PET_RENDER_HEIGHT MERRY_MEDIA_HEIGHT
 
 BUILD_ASSERT(CONFIG_LV_Z_MEM_POOL_SIZE >= 16000,
              "Merry requires a 16 KB LVGL object pool");
@@ -94,9 +95,13 @@ static uint16_t pet_animation_count = 1u;
 static bool pet_animation_loop = true;
 static bool screen_is_on = true;
 static bool pet_mode;
+static bool media_mode;
 static bool ui_initialized;
 static atomic_t requested_mode = ATOMIC_INIT(ZMK_ACTIVITY_ACTIVE);
 static atomic_t codex_animation_id = ATOMIC_INIT(MERRY_ANIM_IDLE);
+static atomic_t media_state = ATOMIC_INIT(MERRY_MEDIA_NONE);
+static atomic_t media_valid = ATOMIC_INIT(0);
+K_SEM_DEFINE(media_ui_sync, 0, 1);
 
 static uint8_t packed_palette_index(uint32_t source_pixel) {
     const uint32_t bit_index = source_pixel * PET_BITS_PER_PIXEL;
@@ -134,7 +139,7 @@ static void set_screen_power(bool on) {
         }
         (void)led_set_brightness(backlight, backlight_index, ui_config.brightness);
         screen_is_on = true;
-        if (pet_mode && pet_timer != NULL) {
+        if (pet_mode && !media_mode && pet_timer != NULL) {
             lv_timer_resume(pet_timer);
         }
     } else if (screen_is_on) {
@@ -154,6 +159,8 @@ static int load_pet_frame(uint16_t animation_frame) {
     if (rc < 0) {
         return rc;
     }
+
+    atomic_clear(&media_valid);
 
     for (uint32_t y = 0u; y < PET_RENDER_HEIGHT; y++) {
         const uint32_t source_y =
@@ -216,6 +223,41 @@ static void refresh_pet_animation(void) {
     (void)load_pet_frame(0u);
 }
 
+static bool media_should_show(void) {
+    const uint8_t codex = (uint8_t)atomic_get(&codex_animation_id);
+    const uint8_t media = (uint8_t)atomic_get(&media_state);
+
+    if (!atomic_get(&media_valid) || media == MERRY_MEDIA_NONE ||
+        codex == MERRY_ANIM_NEEDS_INPUT ||
+        codex == MERRY_ANIM_BLOCKED) {
+        return false;
+    }
+    return media == MERRY_MEDIA_PLAYING || codex == MERRY_ANIM_IDLE;
+}
+
+static void show_pet(void);
+
+static void show_media(void) {
+    pet_mode = true;
+    media_mode = true;
+    set_screen_power(true);
+    set_dashboard_visible(false);
+    if (pet_timer != NULL) {
+        lv_timer_pause(pet_timer);
+    }
+    set_hidden(pet_image, false);
+    lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
+    lv_obj_invalidate(pet_image);
+}
+
+static void show_idle_content(void) {
+    if (media_should_show()) {
+        show_media();
+    } else {
+        show_pet();
+    }
+}
+
 static void codex_state_apply_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
 
@@ -225,9 +267,10 @@ static void codex_state_apply_work_callback(struct k_work *work) {
      */
     if (ui_initialized && ui_config.display_mode == MERRY_DISPLAY_AUTO && pet_mode &&
         screen_is_on) {
-        refresh_pet_animation();
-        if (pet_timer != NULL) {
-            lv_timer_resume(pet_timer);
+        if (media_should_show()) {
+            show_media();
+        } else {
+            show_pet();
         }
     }
 }
@@ -250,8 +293,96 @@ int merry_codex_state_set(uint8_t animation_id) {
     return 0;
 }
 
+static void media_state_apply_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    if (!ui_initialized || ui_config.display_mode != MERRY_DISPLAY_AUTO || !pet_mode ||
+        !screen_is_on) {
+        return;
+    }
+    show_idle_content();
+}
+
+K_WORK_DEFINE(media_state_apply_work, media_state_apply_work_callback);
+
+static void media_upload_begin_work_callback(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    if (pet_timer != NULL) {
+        lv_timer_pause(pet_timer);
+    }
+    if (pet_mode) {
+        set_hidden(pet_image, true);
+    }
+    media_mode = false;
+    atomic_clear(&media_valid);
+    k_sem_give(&media_ui_sync);
+}
+
+K_WORK_DEFINE(media_upload_begin_work, media_upload_begin_work_callback);
+
+uint8_t merry_media_state_get(void) {
+    return (uint8_t)atomic_get(&media_state);
+}
+
+int merry_media_state_set(uint8_t state) {
+    if (state > MERRY_MEDIA_PAUSED) {
+        return -EINVAL;
+    }
+
+    atomic_val_t previous = atomic_set(&media_state, state);
+    if ((uint8_t)previous != state && ui_initialized && zmk_display_is_initialized()) {
+        k_work_submit_to_queue(zmk_display_work_q(), &media_state_apply_work);
+    }
+    return 0;
+}
+
+int merry_media_upload_begin(void) {
+    if (!ui_initialized || !zmk_display_is_initialized()) {
+        atomic_clear(&media_valid);
+        return 0;
+    }
+
+    k_sem_reset(&media_ui_sync);
+    if (k_work_submit_to_queue(zmk_display_work_q(), &media_upload_begin_work) < 0) {
+        return -EIO;
+    }
+    return k_sem_take(&media_ui_sync, K_SECONDS(2));
+}
+
+int merry_media_upload_write(size_t offset, const uint8_t *data, size_t size) {
+    if (data == NULL || offset > sizeof(decoded_frame) || size > sizeof(decoded_frame) - offset) {
+        return -EINVAL;
+    }
+    memcpy((uint8_t *)decoded_frame + offset, data, size);
+    return 0;
+}
+
+int merry_media_upload_finish(uint32_t expected_crc32, uint8_t state) {
+    if (state < MERRY_MEDIA_PLAYING || state > MERRY_MEDIA_PAUSED ||
+        pet_crc32((const uint8_t *)decoded_frame, sizeof(decoded_frame)) != expected_crc32) {
+        merry_media_upload_abort();
+        return -EINVAL;
+    }
+
+    atomic_set(&media_state, state);
+    atomic_set(&media_valid, 1);
+    if (ui_initialized && zmk_display_is_initialized()) {
+        k_work_submit_to_queue(zmk_display_work_q(), &media_state_apply_work);
+    }
+    return 0;
+}
+
+void merry_media_upload_abort(void) {
+    atomic_clear(&media_valid);
+    if (ui_initialized && zmk_display_is_initialized()) {
+        k_work_submit_to_queue(zmk_display_work_q(), &media_state_apply_work);
+    }
+}
+
 static void show_dashboard(void) {
     pet_mode = false;
+    media_mode = false;
     set_screen_power(true);
     if (pet_timer != NULL) {
         lv_timer_pause(pet_timer);
@@ -262,6 +393,7 @@ static void show_dashboard(void) {
 
 static void show_pet(void) {
     pet_mode = true;
+    media_mode = false;
     set_screen_power(true);
     set_dashboard_visible(false);
     set_hidden(pet_image, false);
@@ -299,7 +431,7 @@ static void pet_delay_ui_work_callback(struct k_work *work) {
     if (ui_config.display_mode == MERRY_DISPLAY_AUTO &&
         atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
         zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
-        show_pet();
+        show_idle_content();
         k_work_reschedule(&screen_off_delay_work,
                           K_MSEC(CONFIG_MERRY_SCREEN_OFF_DELAY_MS));
     }
