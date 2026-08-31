@@ -152,9 +152,10 @@ function Get-ContextThreadId {
 }
 
 function Disconnect-CodexPipe {
-    if ($null -ne $script:pipe) {
-        $script:pipe.Dispose()
-        $script:pipe = $null
+    $pipe = $script:pipe
+    $script:pipe = $null
+    if ($null -ne $pipe) {
+        try { $pipe.Dispose() } catch {}
     }
     $script:toolCatalog = @{}
 }
@@ -277,14 +278,31 @@ function Get-DongleCandidates {
 }
 
 function Disconnect-Dongle {
-    if ($null -ne $script:serial) {
-        if ($script:serial.IsOpen) {
-            $script:serial.Close()
-        }
-        $script:serial.Dispose()
-        $script:serial = $null
-    }
+    $serial = $script:serial
+    $script:serial = $null
     $script:selectedPort = $null
+    if ($null -ne $serial) {
+        try {
+            if ($serial.IsOpen) { $serial.Close() }
+        } catch {}
+        try { $serial.Dispose() } catch {}
+    }
+}
+
+function Test-MerryMediaEligible {
+    param([string]$CodexState, [string]$MediaState)
+    return $MediaState -in @('Playing', 'Paused') -and $CodexState -ne 'Running'
+}
+
+function Test-MerryArtworkUploadNeeded {
+    param(
+        [bool]$Eligible,
+        [string]$MediaKey,
+        [string]$LastUploadedKey,
+        [bool]$WasEligible
+    )
+    return $Eligible -and -not [string]::IsNullOrWhiteSpace($MediaKey) -and
+        ($MediaKey -ne $LastUploadedKey -or -not $WasEligible)
 }
 
 function Invoke-DongleState {
@@ -475,10 +493,10 @@ function Connect-Dongle {
             return
         }
         catch {
-            if ($serial.IsOpen) {
-                $serial.Close()
-            }
-            $serial.Dispose()
+            try {
+                if ($serial.IsOpen) { $serial.Close() }
+            } catch {}
+            try { $serial.Dispose() } catch {}
             Write-Verbose "Rejected serial candidate $candidate`: $($_.Exception.Message)"
         }
     }
@@ -500,6 +518,36 @@ function Invoke-SelfTest {
     }
     if ($hostStateMagic -ne [uint32]0x3153484d -or $HostActivitySeconds -lt 5) {
         throw 'Host-activity protocol self-test failed.'
+    }
+    foreach ($codex in $stateNames) {
+        foreach ($media in @('None', 'Playing', 'Paused')) {
+            $expected = $media -ne 'None' -and $codex -ne 'Running'
+            if ((Test-MerryMediaEligible -CodexState $codex -MediaState $media) -ne
+                $expected) {
+                throw "Priority self-test failed for Codex=$codex, Spotify=$media."
+            }
+        }
+    }
+    if (Test-MerryArtworkUploadNeeded -Eligible $true -MediaKey 'same-track' `
+        -LastUploadedKey 'same-track' -WasEligible $true) {
+        throw 'Pause/resume artwork self-test failed.'
+    }
+    if (-not (Test-MerryArtworkUploadNeeded -Eligible $true -MediaKey 'new-track' `
+        -LastUploadedKey 'old-track' -WasEligible $true)) {
+        throw 'Track-change artwork self-test failed.'
+    }
+    $throwingSerial = [pscustomobject]@{ IsOpen = $true }
+    $throwingSerial | Add-Member -MemberType ScriptMethod -Name Close -Value {
+        throw 'simulated missing USB device'
+    }
+    $throwingSerial | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
+        throw 'simulated disposed USB device'
+    }
+    $script:serial = $throwingSerial
+    $script:selectedPort = 'COM_TEST'
+    Disconnect-Dongle
+    if ($null -ne $script:serial -or $null -ne $script:selectedPort) {
+        throw 'Faulting serial-cleanup self-test failed.'
     }
     Write-Host 'Merry Codex bridge self-test passed.'
 }
@@ -674,8 +722,8 @@ try {
             Key = $trackSnapshot.Key
             Properties = $trackSnapshot.Properties
         }
-        $mediaEligible = $snapshot.State -in @('Playing', 'Paused') -and
-            $state -ne 'Running'
+        $mediaEligible = Test-MerryMediaEligible -CodexState $state `
+            -MediaState $snapshot.State
         $hostActive = $state -ne 'Idle' -or $snapshot.State -eq 'Playing'
         if ($windowsDesktop -and -not $hostActive) {
             $hostActive = [MerryHostActivity]::IdleMilliseconds() -le
@@ -712,8 +760,9 @@ try {
                     Invoke-DongleState -Serial $script:serial -State $state
                     $lastSentCodex = $state
                 }
-                if ($mediaEligible -and $null -ne $snapshot.Key -and
-                    ($snapshot.Key -ne $lastUploadedMediaKey -or -not $lastMediaEligible)) {
+                if (Test-MerryArtworkUploadNeeded -Eligible $mediaEligible `
+                    -MediaKey $snapshot.Key -LastUploadedKey $lastUploadedMediaKey `
+                    -WasEligible $lastMediaEligible) {
                     if ($snapshot.Key -ne $cachedMediaKey -or $null -eq $cachedMediaBytes) {
                         $cachedMediaBytes = ConvertTo-MerryAlbumBytes -Snapshot $snapshot
                         $cachedMediaKey = $snapshot.Key

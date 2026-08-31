@@ -126,9 +126,11 @@ function Wait-MerryWinRt {
 function Initialize-MerryMedia {
     if ($null -ne $script:merryMediaManager -and
         [System.Runtime.InteropServices.Marshal]::IsComObject($script:merryMediaManager)) {
-        $null = [System.Runtime.InteropServices.Marshal]::ReleaseComObject(
-            $script:merryMediaManager
-        )
+        try {
+            $null = [System.Runtime.InteropServices.Marshal]::ReleaseComObject(
+                $script:merryMediaManager
+            )
+        } catch {}
     }
     $script:merryMediaManager = Wait-MerryWinRt (
         [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()

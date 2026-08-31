@@ -22,6 +22,15 @@ param(
     [ValidateRange(-33, 33)]
     [int]$PetY,
 
+    [ValidateRange(0, 2)]
+    [int]$BatteryLeftSlot,
+
+    [ValidateRange(0, 2)]
+    [int]$BatteryDialSlot,
+
+    [ValidateRange(0, 2)]
+    [int]$BatteryRightSlot,
+
     [switch]$Reset
 )
 
@@ -72,9 +81,12 @@ function Read-Exact {
 
 function New-DefaultConfig {
     $bytes = [byte[]]::new(16)
-    $bytes[0] = 2
+    $bytes[0] = 3
     $bytes[3] = 100
     [BitConverter]::GetBytes([uint32]20000).CopyTo($bytes, 4)
+    $bytes[12] = 2
+    $bytes[13] = 0
+    $bytes[14] = 1
     return $bytes
 }
 
@@ -124,6 +136,9 @@ function Show-Config {
         TimeoutSeconds = [BitConverter]::ToUInt32($Config, 4) / 1000.0
         PetX = [BitConverter]::ToInt16($Config, 8)
         PetY = [BitConverter]::ToInt16($Config, 10)
+        BatteryLeftSlot = $Config[12]
+        BatteryDialSlot = $Config[13]
+        BatteryRightSlot = $Config[14]
     } | Format-List
 }
 
@@ -152,7 +167,10 @@ try {
                   $PSBoundParameters.ContainsKey('Brightness') -or
                   $PSBoundParameters.ContainsKey('TimeoutSeconds') -or
                   $PSBoundParameters.ContainsKey('PetX') -or
-                  $PSBoundParameters.ContainsKey('PetY')
+                  $PSBoundParameters.ContainsKey('PetY') -or
+                  $PSBoundParameters.ContainsKey('BatteryLeftSlot') -or
+                  $PSBoundParameters.ContainsKey('BatteryDialSlot') -or
+                  $PSBoundParameters.ContainsKey('BatteryRightSlot')
 
     if ($PSBoundParameters.ContainsKey('Mode')) {
         $config[1] = [byte]$modeValues[$Mode]
@@ -172,6 +190,20 @@ try {
     }
     if ($PSBoundParameters.ContainsKey('PetY')) {
         [BitConverter]::GetBytes([int16]$PetY).CopyTo($config, 10)
+    }
+    if ($PSBoundParameters.ContainsKey('BatteryLeftSlot')) {
+        $config[12] = [byte]$BatteryLeftSlot
+    }
+    if ($PSBoundParameters.ContainsKey('BatteryDialSlot')) {
+        $config[13] = [byte]$BatteryDialSlot
+    }
+    if ($PSBoundParameters.ContainsKey('BatteryRightSlot')) {
+        $config[14] = [byte]$BatteryRightSlot
+    }
+    $uniqueBatterySlots = @($config[12], $config[13], $config[14]) |
+        Select-Object -Unique
+    if ($uniqueBatterySlots.Count -ne 3) {
+        throw 'BatteryLeftSlot, BatteryDialSlot, and BatteryRightSlot must be distinct.'
     }
 
     if ($hasChanges) {

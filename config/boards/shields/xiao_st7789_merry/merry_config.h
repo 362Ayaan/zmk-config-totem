@@ -6,7 +6,7 @@
 
 #include <zephyr/toolchain.h>
 
-#define MERRY_CONFIG_VERSION 2u
+#define MERRY_CONFIG_VERSION 3u
 #define MERRY_CONFIG_DEFAULT_TIMEOUT_MS 20000u
 #define MERRY_CONFIG_MIN_TIMEOUT_MS 1000u
 #define MERRY_CONFIG_MAX_TIMEOUT_MS 3600000u
@@ -30,7 +30,10 @@ struct merry_config {
     uint32_t idle_timeout_ms;
     int16_t pet_x;
     int16_t pet_y;
-    uint32_t reserved;
+    uint8_t battery_left_slot;
+    uint8_t battery_dial_slot;
+    uint8_t battery_right_slot;
+    uint8_t reserved;
 } __packed;
 
 int merry_config_get(struct merry_config *config);

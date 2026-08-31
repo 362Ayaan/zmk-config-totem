@@ -34,9 +34,6 @@
 
 #define DISPLAY_NODE DT_CHOSEN(zephyr_display)
 #define BACKLIGHT_NODE DT_CHOSEN(zmk_display_led)
-#define BATTERY_LEFT_SLOT 0u
-#define BATTERY_DIAL_SLOT 2u
-#define BATTERY_RIGHT_SLOT 1u
 #define PET_SCREEN_WIDTH 240
 #define PET_SCREEN_HEIGHT 240
 #define PET_RENDER_WIDTH MERRY_MEDIA_WIDTH
@@ -53,26 +50,37 @@ static const struct device *const display = DEVICE_DT_GET(DISPLAY_NODE);
 static const struct device *const backlight = DEVICE_DT_GET(DT_PARENT(BACKLIGHT_NODE));
 static const uint8_t backlight_index = DT_NODE_CHILD_IDX(BACKLIGHT_NODE);
 
-static lv_obj_t *dashboard_battery;
-static lv_obj_t *dashboard_layer_caption;
-static lv_obj_t *dashboard_layer_badge;
+static lv_obj_t *dashboard_battery_left;
+static lv_obj_t *dashboard_battery_dial;
+static lv_obj_t *dashboard_battery_right;
+static lv_obj_t *dashboard_layer_accent;
 static lv_obj_t *dashboard_layer;
-static lv_obj_t *dashboard_mod_caption;
-static lv_obj_t *dashboard_modifiers;
+static lv_obj_t *dashboard_mod_ctrl;
+static lv_obj_t *dashboard_mod_alt;
+static lv_obj_t *dashboard_mod_shift;
 static lv_obj_t *dashboard_rule;
 static lv_obj_t *pet_image;
 static lv_obj_t *media_badge;
-static lv_obj_t *media_glyph;
+static lv_obj_t *media_play;
+static lv_obj_t *media_pause_left;
+static lv_obj_t *media_pause_right;
 
 static lv_style_t screen_style;
 static lv_style_t battery_style;
-static lv_style_t caption_style;
-static lv_style_t layer_badge_style;
+static lv_style_t layer_accent_style;
 static lv_style_t layer_style;
 static lv_style_t modifier_style;
 static lv_style_t rule_style;
 static lv_style_t media_badge_style;
-static lv_style_t media_glyph_style;
+static lv_style_t media_play_style;
+static lv_style_t media_pause_style;
+
+static lv_point_precise_t media_play_points[] = {
+    {0, 0},
+    {0, 20},
+    {17, 10},
+    {0, 0},
+};
 
 static uint8_t packed_frame[PET_FRAME_PACKED_BYTES] __aligned(4);
 /* The QSPI pack stores the native 192x208 art. Decode directly into a larger
@@ -129,18 +137,29 @@ static void set_hidden(lv_obj_t *object, bool hidden) {
 }
 
 static void set_dashboard_visible(bool visible) {
-    set_hidden(dashboard_battery, !visible);
-    set_hidden(dashboard_layer_caption, !visible);
-    set_hidden(dashboard_layer_badge, !visible);
+    set_hidden(dashboard_battery_left, !visible);
+    set_hidden(dashboard_battery_dial, !visible);
+    set_hidden(dashboard_battery_right, !visible);
+    set_hidden(dashboard_layer_accent, !visible);
     set_hidden(dashboard_layer, !visible);
-    set_hidden(dashboard_mod_caption, !visible);
-    set_hidden(dashboard_modifiers, !visible);
+    set_hidden(dashboard_mod_ctrl, !visible);
+    set_hidden(dashboard_mod_alt, !visible);
+    set_hidden(dashboard_mod_shift, !visible);
     set_hidden(dashboard_rule, !visible);
 }
 
 static void set_media_overlay_visible(bool visible) {
     set_hidden(media_badge, !visible);
-    set_hidden(media_glyph, !visible);
+    if (!visible) {
+        set_hidden(media_play, true);
+        set_hidden(media_pause_left, true);
+        set_hidden(media_pause_right, true);
+        return;
+    }
+    const bool playing = atomic_get(&media_state) == MERRY_MEDIA_PLAYING;
+    set_hidden(media_play, playing);
+    set_hidden(media_pause_left, !playing);
+    set_hidden(media_pause_right, !playing);
 }
 
 static void set_screen_power(bool on) {
@@ -256,13 +275,12 @@ static void show_media(void) {
         lv_timer_pause(pet_timer);
     }
     set_hidden(pet_image, false);
-    lv_label_set_text(media_glyph,
-                      atomic_get(&media_state) == MERRY_MEDIA_PLAYING ? LV_SYMBOL_PAUSE
-                                                                      : LV_SYMBOL_PLAY);
     set_media_overlay_visible(true);
     lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
     lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
-    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_obj_align(media_play, LV_ALIGN_CENTER, ui_config.pet_x + 71, ui_config.pet_y + 71);
+    lv_obj_align(media_pause_left, LV_ALIGN_CENTER, ui_config.pet_x + 64, ui_config.pet_y + 71);
+    lv_obj_align(media_pause_right, LV_ALIGN_CENTER, ui_config.pet_x + 76, ui_config.pet_y + 71);
     lv_obj_invalidate(pet_image);
 }
 
@@ -418,7 +436,9 @@ static void show_pet(void) {
     set_media_overlay_visible(false);
     lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
     lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
-    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_obj_align(media_play, LV_ALIGN_CENTER, ui_config.pet_x + 71, ui_config.pet_y + 71);
+    lv_obj_align(media_pause_left, LV_ALIGN_CENTER, ui_config.pet_x + 64, ui_config.pet_y + 71);
+    lv_obj_align(media_pause_right, LV_ALIGN_CENTER, ui_config.pet_x + 76, ui_config.pet_y + 71);
     refresh_pet_animation();
     if (pet_timer != NULL) {
         lv_timer_resume(pet_timer);
@@ -527,7 +547,9 @@ static void config_apply_work_callback(struct k_work *work) {
     (void)k_work_cancel_delayable(&screen_off_delay_work);
     lv_obj_align(pet_image, LV_ALIGN_CENTER, ui_config.pet_x, ui_config.pet_y);
     lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
-    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_obj_align(media_play, LV_ALIGN_CENTER, ui_config.pet_x + 71, ui_config.pet_y + 71);
+    lv_obj_align(media_pause_left, LV_ALIGN_CENTER, ui_config.pet_x + 64, ui_config.pet_y + 71);
+    lv_obj_align(media_pause_right, LV_ALIGN_CENTER, ui_config.pet_x + 76, ui_config.pet_y + 71);
 
     switch (ui_config.display_mode) {
     case MERRY_DISPLAY_DASHBOARD:
@@ -611,7 +633,7 @@ static struct layer_status_state layer_status_get_state(const zmk_event_t *eh) {
 
 static void layer_status_update(struct layer_status_state state) {
     lv_label_set_text(dashboard_layer, state.name);
-    lv_obj_align(dashboard_layer, LV_ALIGN_CENTER, 0, -4);
+    lv_obj_align(dashboard_layer, LV_ALIGN_CENTER, 8, -5);
 }
 
 ZMK_DISPLAY_WIDGET_LISTENER(merry_layer_status, struct layer_status_state, layer_status_update,
@@ -627,31 +649,52 @@ struct peripheral_battery_state {
 static struct peripheral_battery_state peripheral_battery_get_state(const zmk_event_t *eh) {
     ARG_UNUSED(eh);
     struct peripheral_battery_state state = {};
-    (void)zmk_split_central_get_peripheral_battery_level(BATTERY_LEFT_SLOT, &state.left);
-    (void)zmk_split_central_get_peripheral_battery_level(BATTERY_DIAL_SLOT, &state.dial);
-    (void)zmk_split_central_get_peripheral_battery_level(BATTERY_RIGHT_SLOT, &state.right);
+    (void)zmk_split_central_get_peripheral_battery_level(ui_config.battery_left_slot,
+                                                         &state.left);
+    (void)zmk_split_central_get_peripheral_battery_level(ui_config.battery_dial_slot,
+                                                         &state.dial);
+    (void)zmk_split_central_get_peripheral_battery_level(ui_config.battery_right_slot,
+                                                         &state.right);
     return state;
 }
 
-static void battery_value(char *destination, size_t size, uint8_t level) {
+static void battery_value(char *destination, size_t size, char label, uint8_t level) {
     if (level == 0u) {
-        snprintf(destination, size, "--");
+        snprintf(destination, size, "%c --", label);
     } else {
-        snprintf(destination, size, "%u", level);
+        snprintf(destination, size, "%c %u", label, level);
     }
 }
 
+static lv_color_t battery_color(uint8_t level) {
+    if (level == 0u) {
+        return lv_color_hex(0x5f5964);
+    }
+    if (level <= 20u) {
+        return lv_color_hex(0xff453a);
+    }
+    if (level <= 50u) {
+        return lv_color_hex(0xff9f0a);
+    }
+    return lv_color_hex(0x32d74b);
+}
+
 static void peripheral_battery_update(struct peripheral_battery_state state) {
-    char left[4];
-    char dial[4];
-    char right[4];
-    char text[32];
-    battery_value(left, sizeof(left), state.left);
-    battery_value(dial, sizeof(dial), state.dial);
-    battery_value(right, sizeof(right), state.right);
-    snprintf(text, sizeof(text), "L %s   D %s   R %s", left, dial, right);
-    lv_label_set_text(dashboard_battery, text);
-    lv_obj_align(dashboard_battery, LV_ALIGN_TOP_MID, 0, 13);
+    char left[8];
+    char dial[8];
+    char right[8];
+    battery_value(left, sizeof(left), 'L', state.left);
+    battery_value(dial, sizeof(dial), 'D', state.dial);
+    battery_value(right, sizeof(right), 'R', state.right);
+    lv_label_set_text(dashboard_battery_left, left);
+    lv_label_set_text(dashboard_battery_dial, dial);
+    lv_label_set_text(dashboard_battery_right, right);
+    lv_obj_set_style_text_color(dashboard_battery_left, battery_color(state.left), LV_PART_MAIN);
+    lv_obj_set_style_text_color(dashboard_battery_dial, battery_color(state.dial), LV_PART_MAIN);
+    lv_obj_set_style_text_color(dashboard_battery_right, battery_color(state.right), LV_PART_MAIN);
+    lv_obj_align(dashboard_battery_left, LV_ALIGN_TOP_MID, -76, 14);
+    lv_obj_align(dashboard_battery_dial, LV_ALIGN_TOP_MID, 0, 14);
+    lv_obj_align(dashboard_battery_right, LV_ALIGN_TOP_MID, 76, 14);
 }
 
 ZMK_DISPLAY_WIDGET_LISTENER(merry_battery_status, struct peripheral_battery_state,
@@ -661,18 +704,17 @@ ZMK_SUBSCRIPTION(merry_battery_status, zmk_peripheral_battery_state_changed);
 static void modifier_update_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
     const zmk_mod_flags_t mods = zmk_hid_get_explicit_mods();
-    char text[24] = "";
-    if ((mods & (MOD_LCTL | MOD_RCTL)) != 0u) {
-        strcat(text, "CTRL");
-    }
-    if ((mods & (MOD_LALT | MOD_RALT)) != 0u) {
-        strcat(text, text[0] == '\0' ? "ALT" : "  ALT");
-    }
-    if ((mods & (MOD_LSFT | MOD_RSFT)) != 0u) {
-        strcat(text, text[0] == '\0' ? "SHIFT" : "  SHIFT");
-    }
-    lv_label_set_text(dashboard_modifiers, text);
-    lv_obj_align(dashboard_modifiers, LV_ALIGN_BOTTOM_MID, 0, -13);
+    const lv_color_t inactive = lv_color_hex(0x49434f);
+    const lv_color_t active = lv_color_hex(0xbf5af2);
+    lv_obj_set_style_text_color(dashboard_mod_ctrl,
+                                (mods & (MOD_LCTL | MOD_RCTL)) != 0u ? active : inactive,
+                                LV_PART_MAIN);
+    lv_obj_set_style_text_color(dashboard_mod_alt,
+                                (mods & (MOD_LALT | MOD_RALT)) != 0u ? active : inactive,
+                                LV_PART_MAIN);
+    lv_obj_set_style_text_color(dashboard_mod_shift,
+                                (mods & (MOD_LSFT | MOD_RSFT)) != 0u ? active : inactive,
+                                LV_PART_MAIN);
 }
 
 K_WORK_DEFINE(modifier_update_work, modifier_update_work_callback);
@@ -703,35 +745,30 @@ static void init_styles(void) {
     lv_style_set_text_color(&battery_style, lv_color_hex(0xf4eee4));
     lv_style_set_bg_opa(&battery_style, LV_OPA_TRANSP);
 
-    lv_style_init(&caption_style);
-    lv_style_set_text_font(&caption_style, &lv_font_montserrat_16);
-    lv_style_set_text_color(&caption_style, lv_color_hex(0x9b948b));
-    lv_style_set_bg_opa(&caption_style, LV_OPA_TRANSP);
-
     lv_style_init(&layer_style);
     lv_style_set_text_font(&layer_style, &lv_font_montserrat_32);
-    lv_style_set_text_color(&layer_style, lv_color_hex(0xc084fc));
+    lv_style_set_text_color(&layer_style, lv_color_hex(0xbf5af2));
     lv_style_set_text_letter_space(&layer_style, 2);
     lv_style_set_bg_opa(&layer_style, LV_OPA_TRANSP);
 
-    lv_style_init(&layer_badge_style);
-    lv_style_set_bg_color(&layer_badge_style, lv_color_hex(0x251036));
-    lv_style_set_bg_opa(&layer_badge_style, LV_OPA_COVER);
-    lv_style_set_border_color(&layer_badge_style, lv_color_hex(0x9b5de5));
-    lv_style_set_border_width(&layer_badge_style, 2);
-    lv_style_set_radius(&layer_badge_style, 12);
-    lv_style_set_pad_all(&layer_badge_style, 0);
+    lv_style_init(&layer_accent_style);
+    lv_style_set_bg_color(&layer_accent_style, lv_color_hex(0xbf5af2));
+    lv_style_set_bg_opa(&layer_accent_style, LV_OPA_COVER);
+    lv_style_set_border_width(&layer_accent_style, 0);
+    lv_style_set_radius(&layer_accent_style, 0);
+    lv_style_set_pad_all(&layer_accent_style, 0);
 
     lv_style_init(&modifier_style);
-    lv_style_set_text_font(&modifier_style, &lv_font_montserrat_20);
-    lv_style_set_text_color(&modifier_style, lv_color_hex(0xf4eee4));
+    lv_style_set_text_font(&modifier_style, &lv_font_montserrat_16);
+    lv_style_set_text_color(&modifier_style, lv_color_hex(0x49434f));
+    lv_style_set_text_letter_space(&modifier_style, 1);
     lv_style_set_bg_opa(&modifier_style, LV_OPA_TRANSP);
 
     lv_style_init(&rule_style);
-    lv_style_set_bg_color(&rule_style, lv_color_hex(0x3a302a));
+    lv_style_set_bg_color(&rule_style, lv_color_hex(0x2c2730));
     lv_style_set_bg_opa(&rule_style, LV_OPA_COVER);
     lv_style_set_border_width(&rule_style, 0);
-    lv_style_set_radius(&rule_style, 1);
+    lv_style_set_radius(&rule_style, 0);
 
     lv_style_init(&media_badge_style);
     lv_style_set_bg_color(&media_badge_style, lv_color_hex(0x000000));
@@ -742,10 +779,17 @@ static void init_styles(void) {
     lv_style_set_radius(&media_badge_style, LV_RADIUS_CIRCLE);
     lv_style_set_pad_all(&media_badge_style, 0);
 
-    lv_style_init(&media_glyph_style);
-    lv_style_set_text_font(&media_glyph_style, &lv_font_montserrat_20);
-    lv_style_set_text_color(&media_glyph_style, lv_color_hex(0xffffff));
-    lv_style_set_bg_opa(&media_glyph_style, LV_OPA_TRANSP);
+    lv_style_init(&media_play_style);
+    lv_style_set_line_color(&media_play_style, lv_color_hex(0xffffff));
+    lv_style_set_line_width(&media_play_style, 3);
+    lv_style_set_line_rounded(&media_play_style, true);
+
+    lv_style_init(&media_pause_style);
+    lv_style_set_bg_color(&media_pause_style, lv_color_hex(0xffffff));
+    lv_style_set_bg_opa(&media_pause_style, LV_OPA_COVER);
+    lv_style_set_border_width(&media_pause_style, 0);
+    lv_style_set_radius(&media_pause_style, 0);
+    lv_style_set_pad_all(&media_pause_style, 0);
 }
 
 lv_obj_t *zmk_display_status_screen(void) {
@@ -759,41 +803,53 @@ lv_obj_t *zmk_display_status_screen(void) {
     }
     lv_obj_add_style(screen, &screen_style, LV_PART_MAIN);
 
-    dashboard_battery = lv_label_create(screen);
-    dashboard_layer_caption = lv_label_create(screen);
-    dashboard_layer_badge = lv_obj_create(screen);
+    dashboard_battery_left = lv_label_create(screen);
+    dashboard_battery_dial = lv_label_create(screen);
+    dashboard_battery_right = lv_label_create(screen);
+    dashboard_layer_accent = lv_obj_create(screen);
     dashboard_layer = lv_label_create(screen);
-    dashboard_mod_caption = lv_label_create(screen);
-    dashboard_modifiers = lv_label_create(screen);
+    dashboard_mod_ctrl = lv_label_create(screen);
+    dashboard_mod_alt = lv_label_create(screen);
+    dashboard_mod_shift = lv_label_create(screen);
     dashboard_rule = lv_obj_create(screen);
     pet_image = lv_image_create(screen);
     media_badge = lv_obj_create(screen);
-    media_glyph = lv_label_create(screen);
-    if (dashboard_battery == NULL || dashboard_layer_caption == NULL ||
-        dashboard_layer_badge == NULL || dashboard_layer == NULL || dashboard_mod_caption == NULL ||
-        dashboard_modifiers == NULL || dashboard_rule == NULL || pet_image == NULL ||
-        media_badge == NULL || media_glyph == NULL) {
+    media_play = lv_line_create(screen);
+    media_pause_left = lv_obj_create(screen);
+    media_pause_right = lv_obj_create(screen);
+    if (dashboard_battery_left == NULL || dashboard_battery_dial == NULL ||
+        dashboard_battery_right == NULL || dashboard_layer_accent == NULL ||
+        dashboard_layer == NULL || dashboard_mod_ctrl == NULL || dashboard_mod_alt == NULL ||
+        dashboard_mod_shift == NULL || dashboard_rule == NULL || pet_image == NULL ||
+        media_badge == NULL || media_play == NULL || media_pause_left == NULL ||
+        media_pause_right == NULL) {
         lv_obj_del(screen);
         return NULL;
     }
 
-    lv_obj_add_style(dashboard_battery, &battery_style, LV_PART_MAIN);
-    lv_obj_add_style(dashboard_layer_caption, &caption_style, LV_PART_MAIN);
-    lv_obj_add_style(dashboard_layer_badge, &layer_badge_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_battery_left, &battery_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_battery_dial, &battery_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_battery_right, &battery_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_layer_accent, &layer_accent_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_layer, &layer_style, LV_PART_MAIN);
-    lv_obj_add_style(dashboard_mod_caption, &caption_style, LV_PART_MAIN);
-    lv_obj_add_style(dashboard_modifiers, &modifier_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_mod_ctrl, &modifier_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_mod_alt, &modifier_style, LV_PART_MAIN);
+    lv_obj_add_style(dashboard_mod_shift, &modifier_style, LV_PART_MAIN);
     lv_obj_add_style(dashboard_rule, &rule_style, LV_PART_MAIN);
     lv_obj_add_style(media_badge, &media_badge_style, LV_PART_MAIN);
-    lv_obj_add_style(media_glyph, &media_glyph_style, LV_PART_MAIN);
+    lv_obj_add_style(media_play, &media_play_style, LV_PART_MAIN);
+    lv_obj_add_style(media_pause_left, &media_pause_style, LV_PART_MAIN);
+    lv_obj_add_style(media_pause_right, &media_pause_style, LV_PART_MAIN);
 
-    lv_label_set_text(dashboard_layer_caption, "LAYER");
-    lv_obj_align(dashboard_layer_caption, LV_ALIGN_CENTER, 0, -48);
-    lv_obj_set_size(dashboard_layer_badge, 190, 58);
-    lv_obj_align(dashboard_layer_badge, LV_ALIGN_CENTER, 0, -4);
-    lv_label_set_text(dashboard_mod_caption, "MODIFIERS");
-    lv_obj_align(dashboard_mod_caption, LV_ALIGN_BOTTOM_MID, 0, -48);
-    lv_obj_set_size(dashboard_rule, 200, 2);
+    lv_obj_set_size(dashboard_layer_accent, 4, 62);
+    lv_obj_align(dashboard_layer_accent, LV_ALIGN_CENTER, -102, -5);
+    lv_label_set_text(dashboard_mod_ctrl, "CTRL");
+    lv_obj_align(dashboard_mod_ctrl, LV_ALIGN_BOTTOM_MID, -76, -18);
+    lv_label_set_text(dashboard_mod_alt, "ALT");
+    lv_obj_align(dashboard_mod_alt, LV_ALIGN_BOTTOM_MID, 0, -18);
+    lv_label_set_text(dashboard_mod_shift, "SHIFT");
+    lv_obj_align(dashboard_mod_shift, LV_ALIGN_BOTTOM_MID, 76, -18);
+    lv_obj_set_size(dashboard_rule, 200, 1);
     lv_obj_align(dashboard_rule, LV_ALIGN_TOP_MID, 0, 49);
 
     lv_image_set_src(pet_image, &pet_image_descriptor);
@@ -801,7 +857,12 @@ lv_obj_t *zmk_display_status_screen(void) {
     set_hidden(pet_image, true);
     lv_obj_set_size(media_badge, 46, 46);
     lv_obj_align(media_badge, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
-    lv_obj_align(media_glyph, LV_ALIGN_CENTER, ui_config.pet_x + 70, ui_config.pet_y + 71);
+    lv_line_set_points(media_play, media_play_points, ARRAY_SIZE(media_play_points));
+    lv_obj_align(media_play, LV_ALIGN_CENTER, ui_config.pet_x + 71, ui_config.pet_y + 71);
+    lv_obj_set_size(media_pause_left, 5, 20);
+    lv_obj_align(media_pause_left, LV_ALIGN_CENTER, ui_config.pet_x + 64, ui_config.pet_y + 71);
+    lv_obj_set_size(media_pause_right, 5, 20);
+    lv_obj_align(media_pause_right, LV_ALIGN_CENTER, ui_config.pet_x + 76, ui_config.pet_y + 71);
     set_media_overlay_visible(false);
 
     pet_timer = lv_timer_create(pet_timer_callback, 250, NULL);

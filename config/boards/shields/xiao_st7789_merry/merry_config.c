@@ -30,6 +30,9 @@ static const struct merry_config default_config = {
     .animation_id = MERRY_ANIM_IDLE,
     .brightness = 100u,
     .idle_timeout_ms = MERRY_CONFIG_DEFAULT_TIMEOUT_MS,
+    .battery_left_slot = 2u,
+    .battery_dial_slot = 0u,
+    .battery_right_slot = 1u,
 };
 
 static struct merry_config current_config = {
@@ -38,6 +41,9 @@ static struct merry_config current_config = {
     .animation_id = MERRY_ANIM_IDLE,
     .brightness = 100u,
     .idle_timeout_ms = MERRY_CONFIG_DEFAULT_TIMEOUT_MS,
+    .battery_left_slot = 2u,
+    .battery_dial_slot = 0u,
+    .battery_right_slot = 1u,
 };
 
 K_MUTEX_DEFINE(config_mutex);
@@ -50,6 +56,11 @@ bool merry_config_is_valid(const struct merry_config *config) {
            config->idle_timeout_ms <= MERRY_CONFIG_MAX_TIMEOUT_MS &&
            config->pet_x >= MERRY_CONFIG_MIN_X && config->pet_x <= MERRY_CONFIG_MAX_X &&
            config->pet_y >= MERRY_CONFIG_MIN_Y && config->pet_y <= MERRY_CONFIG_MAX_Y &&
+           config->battery_left_slot < 3u && config->battery_dial_slot < 3u &&
+           config->battery_right_slot < 3u &&
+           config->battery_left_slot != config->battery_dial_slot &&
+           config->battery_left_slot != config->battery_right_slot &&
+           config->battery_dial_slot != config->battery_right_slot &&
            config->reserved == 0u;
 }
 
@@ -103,7 +114,20 @@ static int merry_settings_set(const char *name, size_t len, settings_read_cb rea
     if (rc < 0) {
         return rc;
     }
-    if (persisted.magic != MERRY_SETTINGS_MAGIC || !merry_config_is_valid(&persisted.config)) {
+    if (persisted.magic != MERRY_SETTINGS_MAGIC) {
+        return -EINVAL;
+    }
+    if (persisted.config.version == 2u && persisted.config.battery_left_slot == 0u &&
+        persisted.config.battery_dial_slot == 0u && persisted.config.battery_right_slot == 0u &&
+        persisted.config.reserved == 0u) {
+        /* Version 2 used bytes 12..15 as a zeroed reserved uint32. Preserve
+         * every user-facing setting while adopting the observed bond order. */
+        persisted.config.version = MERRY_CONFIG_VERSION;
+        persisted.config.battery_left_slot = 2u;
+        persisted.config.battery_dial_slot = 0u;
+        persisted.config.battery_right_slot = 1u;
+    }
+    if (!merry_config_is_valid(&persisted.config)) {
         return -EINVAL;
     }
     current_config = persisted.config;
