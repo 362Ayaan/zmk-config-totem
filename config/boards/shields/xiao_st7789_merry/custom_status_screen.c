@@ -471,6 +471,9 @@ static void screen_off_delay_callback(struct k_work *work) {
 
 K_WORK_DELAYABLE_DEFINE(screen_off_delay_work, screen_off_delay_callback);
 
+static void pet_delay_callback(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(pet_delay_work, pet_delay_callback);
+
 static void host_activity_apply_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
 
@@ -549,8 +552,6 @@ static void pet_delay_callback(struct k_work *work) {
         k_work_submit_to_queue(zmk_display_work_q(), &pet_delay_ui_work);
     }
 }
-
-K_WORK_DELAYABLE_DEFINE(pet_delay_work, pet_delay_callback);
 
 static void schedule_pet_after(uint32_t delay_ms) {
     (void)k_work_cancel_delayable(&screen_off_delay_work);
