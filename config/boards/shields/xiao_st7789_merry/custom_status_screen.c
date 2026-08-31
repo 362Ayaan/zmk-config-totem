@@ -114,7 +114,7 @@ static atomic_t requested_mode = ATOMIC_INIT(ZMK_ACTIVITY_ACTIVE);
 static atomic_t codex_animation_id = ATOMIC_INIT(MERRY_ANIM_IDLE);
 static atomic_t media_state = ATOMIC_INIT(MERRY_MEDIA_NONE);
 static atomic_t media_valid = ATOMIC_INIT(0);
-static atomic_t host_active = ATOMIC_INIT(0);
+static atomic_t host_state = ATOMIC_INIT(MERRY_HOST_AFK);
 K_SEM_DEFINE(media_ui_sync, 0, 1);
 
 static uint8_t packed_palette_index(uint32_t source_pixel) {
@@ -267,6 +267,7 @@ static bool media_should_show(void) {
 }
 
 static void show_pet(void);
+static void config_apply_work_callback(struct k_work *work);
 
 static void show_media(void) {
     pet_mode = true;
@@ -451,7 +452,8 @@ static void screen_off_ui_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
     if (ui_config.display_mode == MERRY_DISPLAY_AUTO && pet_mode &&
         atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
-        zmk_activity_get_state() == ZMK_ACTIVITY_IDLE && !atomic_get(&host_active)) {
+        zmk_activity_get_state() == ZMK_ACTIVITY_IDLE &&
+        atomic_get(&host_state) != MERRY_HOST_ACTIVE) {
         set_screen_power(false);
     }
 }
@@ -472,15 +474,31 @@ K_WORK_DELAYABLE_DEFINE(screen_off_delay_work, screen_off_delay_callback);
 static void host_activity_apply_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
 
-    if (!ui_initialized || ui_config.display_mode != MERRY_DISPLAY_AUTO ||
-        zmk_activity_get_state() == ZMK_ACTIVITY_ACTIVE ||
-        atomic_get(&requested_mode) == ZMK_ACTIVITY_ACTIVE) {
+    if (!ui_initialized) {
         return;
     }
 
-    if (atomic_get(&host_active)) {
+    const uint8_t state = (uint8_t)atomic_get(&host_state);
+    if (state == MERRY_HOST_DISPLAY_OFF) {
+        (void)k_work_cancel_delayable(&pet_delay_work);
+        (void)k_work_cancel_delayable(&screen_off_delay_work);
+        set_screen_power(false);
+        return;
+    }
+
+    if (ui_config.display_mode != MERRY_DISPLAY_AUTO) {
+        config_apply_work_callback(NULL);
+        return;
+    }
+
+    if (state == MERRY_HOST_ACTIVE) {
         if (!screen_is_on) {
-            show_idle_content();
+            if (zmk_activity_get_state() == ZMK_ACTIVITY_ACTIVE ||
+                atomic_get(&requested_mode) == ZMK_ACTIVITY_ACTIVE) {
+                show_dashboard();
+            } else {
+                show_idle_content();
+            }
         }
         if (pet_mode) {
             k_work_reschedule(&screen_off_delay_work,
@@ -491,23 +509,28 @@ static void host_activity_apply_work_callback(struct k_work *work) {
 
 K_WORK_DEFINE(host_activity_apply_work, host_activity_apply_work_callback);
 
-bool merry_host_activity_get(void) {
-    return atomic_get(&host_active) != 0;
+uint8_t merry_host_state_get(void) {
+    return (uint8_t)atomic_get(&host_state);
 }
 
-void merry_host_activity_set(bool active) {
-    atomic_val_t previous = atomic_set(&host_active, active ? 1 : 0);
-    if (((previous != 0) != active || active) && ui_initialized &&
+int merry_host_state_set(uint8_t state) {
+    if (state > MERRY_HOST_DISPLAY_OFF) {
+        return -EINVAL;
+    }
+    atomic_val_t previous = atomic_set(&host_state, state);
+    if ((previous != state || state != MERRY_HOST_AFK) && ui_initialized &&
         zmk_display_is_initialized()) {
-        /* Every active heartbeat moves the AFK deadline forward without
-         * waking the dashboard or pretending the split keyboard was used. */
+        /* Every active heartbeat moves the AFK deadline forward. Display-off
+         * is an absolute override and never wakes from keyboard activity. */
         k_work_submit_to_queue(zmk_display_work_q(), &host_activity_apply_work);
     }
+    return 0;
 }
 
 static void pet_delay_ui_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
     if (ui_config.display_mode == MERRY_DISPLAY_AUTO &&
+        atomic_get(&host_state) != MERRY_HOST_DISPLAY_OFF &&
         atomic_get(&requested_mode) == ZMK_ACTIVITY_IDLE &&
         zmk_activity_get_state() == ZMK_ACTIVITY_IDLE) {
         show_idle_content();
@@ -552,6 +575,11 @@ static void config_apply_work_callback(struct k_work *work) {
     lv_obj_align(media_play, LV_ALIGN_CENTER, ui_config.pet_x + 71, ui_config.pet_y + 71);
     lv_obj_align(media_pause_left, LV_ALIGN_CENTER, ui_config.pet_x + 64, ui_config.pet_y + 71);
     lv_obj_align(media_pause_right, LV_ALIGN_CENTER, ui_config.pet_x + 76, ui_config.pet_y + 71);
+
+    if (merry_host_state_get() == MERRY_HOST_DISPLAY_OFF) {
+        set_screen_power(false);
+        return;
+    }
 
     switch (ui_config.display_mode) {
     case MERRY_DISPLAY_DASHBOARD:
@@ -599,6 +627,12 @@ static struct activity_status_state activity_status_get_state(const zmk_event_t 
 static void activity_status_update(struct activity_status_state state) {
     atomic_set(&requested_mode, state.state);
     if (ui_config.display_mode != MERRY_DISPLAY_AUTO) {
+        return;
+    }
+    if (merry_host_state_get() == MERRY_HOST_DISPLAY_OFF) {
+        (void)k_work_cancel_delayable(&pet_delay_work);
+        (void)k_work_cancel_delayable(&screen_off_delay_work);
+        set_screen_power(false);
         return;
     }
     if (state.state == ZMK_ACTIVITY_ACTIVE) {

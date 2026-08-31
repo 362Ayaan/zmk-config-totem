@@ -2,8 +2,13 @@
 
 #pragma once
 
-#include <stdbool.h>
+#include <stdint.h>
 
-bool merry_host_activity_get(void);
-void merry_host_activity_set(bool active);
+enum merry_host_state {
+    MERRY_HOST_AFK = 0,
+    MERRY_HOST_ACTIVE = 1,
+    MERRY_HOST_DISPLAY_OFF = 2,
+};
 
+uint8_t merry_host_state_get(void);
+int merry_host_state_set(uint8_t state);

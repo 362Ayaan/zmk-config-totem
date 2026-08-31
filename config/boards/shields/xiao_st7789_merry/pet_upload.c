@@ -176,7 +176,7 @@ struct media_state_response {
 
 struct host_state_request {
     uint8_t version;
-    uint8_t active;
+    uint8_t state;
     uint16_t sequence;
     uint32_t ttl_ms;
     uint32_t crc32;
@@ -185,7 +185,7 @@ struct host_state_request {
 struct host_state_response {
     uint32_t magic;
     uint8_t status;
-    uint8_t active;
+    uint8_t state;
     uint16_t sequence;
 } __packed;
 
@@ -280,7 +280,7 @@ K_WORK_DELAYABLE_DEFINE(media_expire_work, media_expire_work_callback);
 
 static void host_expire_work_callback(struct k_work *work) {
     ARG_UNUSED(work);
-    merry_host_activity_set(false);
+    (void)merry_host_state_set(MERRY_HOST_AFK);
 }
 
 K_WORK_DELAYABLE_DEFINE(host_expire_work, host_expire_work_callback);
@@ -358,7 +358,7 @@ static void send_host_state_response(enum host_status status, uint16_t sequence)
     const struct host_state_response response = {
         .magic = HOST_STATE_RESPONSE_MAGIC,
         .status = status,
-        .active = merry_host_activity_get() ? 1u : 0u,
+        .state = merry_host_state_get(),
         .sequence = sequence,
     };
     const uint8_t *bytes = (const uint8_t *)&response;
@@ -370,7 +370,7 @@ static void send_host_state_response(enum host_status status, uint16_t sequence)
 static void handle_host_state_request(void) {
     struct host_state_request request = {};
     if (read_exact(&request, sizeof(request)) < 0 ||
-        request.version != MEDIA_PROTOCOL_VERSION || request.active > 1u ||
+        request.version != MEDIA_PROTOCOL_VERSION || request.state > MERRY_HOST_DISPLAY_OFF ||
         request.ttl_ms < CODEX_MIN_TTL_MS || request.ttl_ms > CODEX_MAX_TTL_MS) {
         send_host_state_response(HOST_BAD_HEADER, request.sequence);
         return;
@@ -381,8 +381,11 @@ static void handle_host_state_request(void) {
         return;
     }
 
-    merry_host_activity_set(request.active != 0u);
-    if (request.active != 0u) {
+    if (merry_host_state_set(request.state) < 0) {
+        send_host_state_response(HOST_BAD_HEADER, request.sequence);
+        return;
+    }
+    if (request.state != MERRY_HOST_AFK) {
         k_work_reschedule(&host_expire_work, K_MSEC(request.ttl_ms));
     } else {
         (void)k_work_cancel_delayable(&host_expire_work);

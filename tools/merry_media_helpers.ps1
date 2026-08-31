@@ -2,18 +2,22 @@ $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties, Windows.Media.Control, ContentType = WindowsRuntime]
 $null = [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType = WindowsRuntime]
 
 if (-not ('MerryAlbumRenderer' -as [type])) {
-    Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
+    Add-Type -ReferencedAssemblies System.Drawing,System.Windows.Forms -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Windows.Forms;
 
 public static class MerryAlbumRenderer
 {
@@ -93,6 +97,178 @@ public static class MerryHostActivity
         if (!GetLastInputInfo(ref info))
             throw new InvalidOperationException("GetLastInputInfo failed.");
         return unchecked((uint)Environment.TickCount - info.dwTime);
+    }
+}
+
+public sealed class MerryPowerMonitor : NativeWindow, IDisposable
+{
+    private const int WM_CLOSE = 0x0010;
+    private const int WM_POWERBROADCAST = 0x0218;
+    private const int WM_WTSSESSION_CHANGE = 0x02B1;
+    private const int PBT_APMSUSPEND = 0x0004;
+    private const int PBT_APMRESUMEAUTOMATIC = 0x0012;
+    private const int PBT_POWERSETTINGCHANGE = 0x8013;
+    private const int WTS_SESSION_LOCK = 0x7;
+    private const int WTS_SESSION_UNLOCK = 0x8;
+    private const int NOTIFY_FOR_THIS_SESSION = 0;
+    private const int DEVICE_NOTIFY_WINDOW_HANDLE = 0;
+    private static readonly Guid ConsoleDisplayState =
+        new Guid("6fe69556-704a-47a0-8f24-c28d936fda47");
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PowerBroadcastSetting
+    {
+        public Guid PowerSetting;
+        public uint DataLength;
+    }
+
+    [DllImport("wtsapi32.dll", SetLastError = true)]
+    private static extern bool WTSRegisterSessionNotification(IntPtr window, int flags);
+
+    [DllImport("wtsapi32.dll")]
+    private static extern bool WTSUnRegisterSessionNotification(IntPtr window);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr RegisterPowerSettingNotification(
+        IntPtr recipient, ref Guid setting, int flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnregisterPowerSettingNotification(IntPtr handle);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr window, uint message,
+        IntPtr wParam, IntPtr lParam);
+
+    private readonly ManualResetEvent ready = new ManualResetEvent(false);
+    private Thread thread;
+    private IntPtr powerNotification;
+    private int locked;
+    private int displayOff;
+    private int revision;
+    private string failure;
+
+    public bool Blanked
+    {
+        get { return Volatile.Read(ref locked) != 0 ||
+                     Volatile.Read(ref displayOff) != 0; }
+    }
+
+    public bool Locked { get { return Volatile.Read(ref locked) != 0; } }
+    public bool DisplayOff { get { return Volatile.Read(ref displayOff) != 0; } }
+    public int Revision { get { return Volatile.Read(ref revision); } }
+    public string Failure { get { return failure; } }
+
+    public void Start()
+    {
+        if (thread != null)
+            return;
+        thread = new Thread(MessageLoop);
+        thread.IsBackground = true;
+        thread.Name = "Merry Windows power monitor";
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!ready.WaitOne(TimeSpan.FromSeconds(5)))
+            throw new TimeoutException("Windows power monitor did not initialize.");
+        if (!String.IsNullOrEmpty(failure))
+            throw new InvalidOperationException(failure);
+    }
+
+    private void MessageLoop()
+    {
+        try
+        {
+            CreateParams parameters = new CreateParams();
+            parameters.Caption = "MerryPowerMonitor";
+            CreateHandle(parameters);
+            if (!WTSRegisterSessionNotification(Handle, NOTIFY_FOR_THIS_SESSION))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            Guid setting = ConsoleDisplayState;
+            powerNotification = RegisterPowerSettingNotification(
+                Handle, ref setting, DEVICE_NOTIFY_WINDOW_HANDLE);
+            if (powerNotification == IntPtr.Zero)
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            ready.Set();
+            Application.Run();
+        }
+        catch (Exception exception)
+        {
+            failure = exception.Message;
+            ready.Set();
+        }
+        finally
+        {
+            CleanupHandles();
+        }
+    }
+
+    private void SetFlag(ref int target, bool value)
+    {
+        int next = value ? 1 : 0;
+        if (Interlocked.Exchange(ref target, next) != next)
+            Interlocked.Increment(ref revision);
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        if (message.Msg == WM_WTSSESSION_CHANGE)
+        {
+            int reason = message.WParam.ToInt32();
+            if (reason == WTS_SESSION_LOCK)
+                SetFlag(ref locked, true);
+            else if (reason == WTS_SESSION_UNLOCK)
+                SetFlag(ref locked, false);
+        }
+        else if (message.Msg == WM_POWERBROADCAST)
+        {
+            int reason = message.WParam.ToInt32();
+            if (reason == PBT_APMSUSPEND)
+            {
+                SetFlag(ref displayOff, true);
+            }
+            else if (reason == PBT_APMRESUMEAUTOMATIC)
+            {
+                SetFlag(ref displayOff, false);
+            }
+            else if (reason == PBT_POWERSETTINGCHANGE && message.LParam != IntPtr.Zero)
+            {
+                PowerBroadcastSetting setting = (PowerBroadcastSetting)Marshal.PtrToStructure(
+                    message.LParam, typeof(PowerBroadcastSetting));
+                if (setting.PowerSetting == ConsoleDisplayState && setting.DataLength >= 4)
+                {
+                    int state = Marshal.ReadInt32(message.LParam, 20);
+                    SetFlag(ref displayOff, state == 0);
+                }
+            }
+        }
+        else if (message.Msg == WM_CLOSE)
+        {
+            CleanupHandles();
+            DestroyHandle();
+            Application.ExitThread();
+            return;
+        }
+        base.WndProc(ref message);
+    }
+
+    private void CleanupHandles()
+    {
+        if (powerNotification != IntPtr.Zero)
+        {
+            UnregisterPowerSettingNotification(powerNotification);
+            powerNotification = IntPtr.Zero;
+        }
+        if (Handle != IntPtr.Zero)
+            WTSUnRegisterSessionNotification(Handle);
+    }
+
+    public void Dispose()
+    {
+        IntPtr window = Handle;
+        if (window != IntPtr.Zero)
+            PostMessage(window, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        if (thread != null && thread.IsAlive && Thread.CurrentThread != thread)
+            thread.Join(TimeSpan.FromSeconds(2));
+        ready.Dispose();
     }
 }
 '@

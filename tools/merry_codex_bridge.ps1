@@ -89,6 +89,7 @@ $mediaWidth = [uint16]202
 $mediaHeight = [uint16]220
 $mediaBytes = 202 * 220 * 2
 $mediaStateIds = @{ None = 0; Playing = 1; Paused = 2 }
+$hostStateIds = @{ AFK = 0; Active = 1; DisplayOff = 2 }
 $script:requestId = 0
 $script:sequence = [uint16]0
 $script:mediaSequence = [uint16]0
@@ -305,6 +306,13 @@ function Test-MerryArtworkUploadNeeded {
         ($MediaKey -ne $LastUploadedKey -or -not $WasEligible)
 }
 
+function Get-MerryHostState {
+    param([bool]$PowerBlanked, [bool]$HostActive)
+    if ($PowerBlanked) { return 'DisplayOff' }
+    if ($HostActive) { return 'Active' }
+    return 'AFK'
+}
+
 function Invoke-DongleState {
     param([System.IO.Ports.SerialPort]$Serial, [string]$State)
 
@@ -437,12 +445,16 @@ function Invoke-DongleMediaState {
     $script:mediaSequence = [uint16](($script:mediaSequence + 1) -band 0xffff)
 }
 
-function Invoke-DongleHostActivity {
-    param([System.IO.Ports.SerialPort]$Serial, [bool]$Active)
+function Invoke-DongleHostState {
+    param(
+        [System.IO.Ports.SerialPort]$Serial,
+        [ValidateSet('AFK', 'Active', 'DisplayOff')]
+        [string]$State
+    )
 
     $body = [byte[]]::new(8)
     $body[0] = $mediaProtocolVersion
-    $body[1] = if ($Active) { [byte]1 } else { [byte]0 }
+    $body[1] = [byte]$hostStateIds[$State]
     [BitConverter]::GetBytes($script:hostSequence).CopyTo($body, 2)
     [BitConverter]::GetBytes([uint32]($TtlSeconds * 1000)).CopyTo($body, 4)
     $request = [byte[]]::new(16)
@@ -460,10 +472,10 @@ function Invoke-DongleHostActivity {
     $status = $response[4]
     $applied = $response[5]
     $sequence = [BitConverter]::ToUInt16($response, 6)
-    $expected = if ($Active) { 1 } else { 0 }
+    $expected = $hostStateIds[$State]
     if ($magic -ne $hostStateResponseMagic -or $status -ne 0 -or
         $sequence -ne $script:hostSequence -or $applied -ne $expected) {
-        throw ('Invalid host-activity acknowledgement: magic=0x{0:x8}, status={1}, active={2}, sequence={3}.' -f
+        throw ('Invalid host-state acknowledgement: magic=0x{0:x8}, status={1}, state={2}, sequence={3}.' -f
             $magic, $status, $applied, $sequence)
     }
     $script:hostSequence = [uint16](($script:hostSequence + 1) -band 0xffff)
@@ -516,8 +528,14 @@ function Invoke-SelfTest {
         $mediaStateIds.Paused -ne 2) {
         throw 'Media protocol self-test failed.'
     }
-    if ($hostStateMagic -ne [uint32]0x3153484d -or $HostActivitySeconds -lt 5) {
+    if ($hostStateMagic -ne [uint32]0x3153484d -or $HostActivitySeconds -lt 5 -or
+        $hostStateIds.Count -ne 3 -or $hostStateIds.DisplayOff -ne 2) {
         throw 'Host-activity protocol self-test failed.'
+    }
+    if ((Get-MerryHostState -PowerBlanked $true -HostActive $true) -ne 'DisplayOff' -or
+        (Get-MerryHostState -PowerBlanked $false -HostActive $true) -ne 'Active' -or
+        (Get-MerryHostState -PowerBlanked $false -HostActive $false) -ne 'AFK') {
+        throw 'Host power-priority self-test failed.'
     }
     foreach ($codex in $stateNames) {
         foreach ($media in @('None', 'Playing', 'Paused')) {
@@ -561,6 +579,22 @@ if ($TtlSeconds -le $PollSeconds + 3) {
     throw 'TtlSeconds must be at least four seconds longer than PollSeconds.'
 }
 
+$powerMonitor = $null
+if ($windowsDesktop) {
+    try {
+        $powerMonitor = [MerryPowerMonitor]::new()
+        $powerMonitor.Start()
+        Write-Host 'Windows lock/display-power monitor ready.'
+    }
+    catch {
+        Write-Warning "Windows power monitor unavailable: $($_.Exception.Message)"
+        if ($null -ne $powerMonitor) {
+            try { $powerMonitor.Dispose() } catch {}
+            $powerMonitor = $null
+        }
+    }
+}
+
 $lastLive = @{}
 $pulseState = $null
 $pulseUntil = [DateTime]::MinValue
@@ -572,7 +606,7 @@ $lastUploadedMediaKey = $null
 $cachedMediaKey = $null
 $cachedMediaBytes = $null
 $mediaWarning = $null
-$lastHostActive = $null
+$lastHostState = $null
 $lastGoodPlayback = [pscustomobject]@{ State = 'None'; Session = $null }
 $missingSince = $null
 $trackSnapshot = [pscustomobject]@{ Key = $null; Properties = $null }
@@ -729,6 +763,9 @@ try {
             $hostActive = [MerryHostActivity]::IdleMilliseconds() -le
                 [uint32]($HostActivitySeconds * 1000)
         }
+        $powerBlanked = $null -ne $powerMonitor -and $powerMonitor.Blanked
+        $hostState = Get-MerryHostState -PowerBlanked $powerBlanked `
+            -HostActive $hostActive
 
         if ($state -ne $lastReportedState) {
             Write-Host ('{0:HH:mm:ss.fff}  Codex pet: {1}' -f [DateTime]::Now, $state)
@@ -738,10 +775,10 @@ try {
             Write-Host ('{0:HH:mm:ss.fff}  Spotify: {1}' -f [DateTime]::Now, $snapshot.State)
             $lastMediaState = $snapshot.State
         }
-        if ($hostActive -ne $lastHostActive) {
-            Write-Host ('{0:HH:mm:ss.fff}  Host activity: {1}' -f [DateTime]::Now,
-                $(if ($hostActive) { 'Active' } else { 'AFK' }))
-            $lastHostActive = $hostActive
+        if ($hostState -ne $lastHostState) {
+            Write-Host ('{0:HH:mm:ss.fff}  Host state: {1}' -f [DateTime]::Now,
+                $hostState)
+            $lastHostState = $hostState
         }
 
         if (-not $DryRun -and $now -ge $serialRetryAt) {
@@ -779,9 +816,9 @@ try {
                     Invoke-DongleMediaState -Serial $script:serial -State $snapshot.State
                     $lastSentMedia = $snapshot.State
                 }
-                if ($heartbeatDue -or $hostActive -ne $lastSentHost) {
-                    Invoke-DongleHostActivity -Serial $script:serial -Active $hostActive
-                    $lastSentHost = $hostActive
+                if ($heartbeatDue -or $hostState -ne $lastSentHost) {
+                    Invoke-DongleHostState -Serial $script:serial -State $hostState
+                    $lastSentHost = $hostState
                 }
                 if ($heartbeatDue) {
                     $nextHeartbeat = [DateTime]::UtcNow.AddSeconds($PollSeconds)
@@ -805,4 +842,7 @@ try {
 finally {
     Disconnect-CodexPipe
     Disconnect-Dongle
+    if ($null -ne $powerMonitor) {
+        try { $powerMonitor.Dispose() } catch {}
+    }
 }
