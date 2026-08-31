@@ -9,6 +9,7 @@ endchoice
 config ZMK_DISPLAY_STATUS_SCREEN_CUSTOM
     select LV_USE_LABEL
     select LV_USE_IMAGE
+    select LV_USE_LINE
     select LV_FONT_MONTSERRAT_16
     select LV_FONT_MONTSERRAT_20
     select LV_FONT_MONTSERRAT_32
