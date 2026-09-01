@@ -403,7 +403,7 @@ static void draw_media_icon(uint16_t *frame, uint8_t state) {
         /* The centroid of a triangle sits one third of the way from its base.
          * Offset the geometry left so the perceived play icon is centered. */
         for (int x = 0; x <= 16; ++x) {
-            const int half_height = (x * 11 + 8) / 16;
+            const int half_height = ((16 - x) * 11 + 8) / 16;
             for (int y = -half_height; y <= half_height; ++y) {
                 put_pixel(frame, center_x - 6 + x, center_y + y, white);
             }

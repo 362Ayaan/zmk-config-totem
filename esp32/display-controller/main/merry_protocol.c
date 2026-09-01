@@ -6,10 +6,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "driver/usb_serial_jtag.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "merry_link.h"
 #include "merry_runtime.h"
 
 #define CODEX_STATE_MAGIC 0x3153434du          /* MCS1 */
@@ -106,27 +106,17 @@ static bool read_exact(void *destination, size_t size, uint32_t timeout_ms) {
         if (wait == 0) {
             wait = 1;
         }
-        const int received = usb_serial_jtag_read_bytes(bytes + offset, size - offset, wait);
-        if (received < 0) {
+        const size_t wanted = size - offset;
+        if (!merry_link_read(bytes + offset, wanted, (uint32_t)(wait * portTICK_PERIOD_MS))) {
             return false;
         }
-        offset += (size_t)received;
+        offset += wanted;
     }
     return true;
 }
 
 static bool write_exact(const void *source, size_t size) {
-    const uint8_t *bytes = source;
-    size_t offset = 0;
-    while (offset < size) {
-        const int written = usb_serial_jtag_write_bytes(bytes + offset, size - offset,
-                                                        pdMS_TO_TICKS(PACKET_TIMEOUT_MS));
-        if (written <= 0) {
-            return false;
-        }
-        offset += (size_t)written;
-    }
-    return true;
+    return merry_link_write(source, size, PACKET_TIMEOUT_MS);
 }
 
 /* Finds an expected framed marker while also recognizing a fresh command. A
@@ -327,17 +317,12 @@ static void protocol_task(void *unused) {
 }
 
 esp_err_t merry_protocol_start(void) {
-    const usb_serial_jtag_driver_config_t config = {
-        .tx_buffer_size = 2048,
-        .rx_buffer_size = 4096,
-    };
-    esp_err_t err = usb_serial_jtag_driver_install(&config);
+    esp_err_t err = merry_link_start();
     if (err != ESP_OK) {
         return err;
     }
     if (xTaskCreatePinnedToCore(protocol_task, "merry-protocol", 6144, NULL, 8, NULL, 0) !=
         pdPASS) {
-        usb_serial_jtag_driver_uninstall();
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

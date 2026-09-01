@@ -1,0 +1,7 @@
+file_format: "1"
+id: xiao_esp32_bridge
+name: XIAO ESP32-S3 Display Bridge
+type: shield
+url: https://github.com/AyaanZaidi/zmk-config
+requires: [xiao]
+features: []

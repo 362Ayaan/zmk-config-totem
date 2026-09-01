@@ -10,6 +10,12 @@ include:
     shield: totem_dongle xiao_st7789_merry
     artifact-name: dongle-st7789-merry
 
+  # Two-board development target: nRF remains the USB HID/split central and
+  # forwards the proven Merry binary protocol to the ESP32-S3 over SPI.
+  - board: xiao_ble//zmk
+    shield: totem_dongle xiao_esp32_bridge
+    artifact-name: dongle-esp32-bridge
+
   # Raw electrical/panel diagnostic: three backlight flashes, then GPIO-driven
   # mode-3 full-screen red/green/blue/white/black cycling. This bypasses LVGL,
   # the Zephyr display/SPI drivers, QSPI, and pet animation code.
