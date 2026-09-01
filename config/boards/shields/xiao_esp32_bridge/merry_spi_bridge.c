@@ -15,8 +15,8 @@
 #include <zephyr/sys/util.h>
 
 #define MERRY_UART_NODE DT_ALIAS(merry_uart)
-#define MERRY_LINK_CONFIG DT_NODELABEL(merry_link_config)
 #define MERRY_LINK_SPI DT_NODELABEL(xiao_spi)
+#define MERRY_LINK_GPIO DT_NODELABEL(gpio0)
 
 #define MERRY_LINK_MAGIC 0x314b4c4du /* MLK1 */
 #define MERRY_LINK_VERSION 1u
@@ -24,6 +24,8 @@
 #define MERRY_LINK_FLAG_ACK BIT(1)
 #define MERRY_LINK_PAYLOAD_SIZE 512u
 #define MERRY_LINK_SPI_HZ 8000000u
+#define MERRY_LINK_CS_PIN 4u    /* XIAO D4 / P0.04 */
+#define MERRY_LINK_READY_PIN 5u /* XIAO D5 / P0.05 */
 
 struct merry_link_header {
     uint32_t magic;
@@ -51,10 +53,17 @@ BUILD_ASSERT(sizeof(struct merry_link_frame) == 544, "link frame changed");
 
 static const struct device *const upload_uart = DEVICE_DT_GET(MERRY_UART_NODE);
 static const struct device *const link_spi = DEVICE_DT_GET(MERRY_LINK_SPI);
-static const struct gpio_dt_spec ready_gpio =
-    GPIO_DT_SPEC_GET(MERRY_LINK_CONFIG, ready_gpios);
+static const struct gpio_dt_spec ready_gpio = {
+    .port = DEVICE_DT_GET(MERRY_LINK_GPIO),
+    .pin = MERRY_LINK_READY_PIN,
+    .dt_flags = GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN,
+};
 static struct spi_cs_control link_cs = {
-    .gpio = GPIO_DT_SPEC_GET(MERRY_LINK_CONFIG, cs_gpios),
+    .gpio = {
+        .port = DEVICE_DT_GET(MERRY_LINK_GPIO),
+        .pin = MERRY_LINK_CS_PIN,
+        .dt_flags = GPIO_ACTIVE_LOW,
+    },
     .delay = 0,
 };
 static const struct spi_config link_spi_config = {

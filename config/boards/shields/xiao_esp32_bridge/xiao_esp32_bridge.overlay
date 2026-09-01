@@ -7,12 +7,6 @@
         merry-uart = &board_cdc_acm_uart;
     };
 
-    merry_link_config: merry_link_config {
-        /* D4 drives ESP D4/GPIO5 chip select. D5 receives READY from
-         * ESP D5/GPIO6. D8/D9/D10 are supplied by xiao_spi pinctrl. */
-        cs-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
-        ready-gpios = <&gpio0 5 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
-    };
 };
 
 &xiao_spi {
