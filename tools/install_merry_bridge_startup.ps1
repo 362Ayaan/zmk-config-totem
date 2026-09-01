@@ -41,17 +41,25 @@ if ($PSBoundParameters.ContainsKey('Port')) {
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $action = New-ScheduledTaskAction -Execute $windowsPowerShell -Argument $arguments `
     -WorkingDirectory $workingDirectory
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
+# RestartCount covers ordinary non-zero exits. The watchdog also recovers the
+# bridge when Windows terminates it in a way Task Scheduler reports as
+# 0xFFFFFFFF, which does not activate RestartCount on every Windows build.
+$watchdogTrigger = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(1)) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive `
     -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
-$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal `
+$task = New-ScheduledTask -Action $action -Trigger @($logonTrigger, $watchdogTrigger) `
+    -Principal $principal `
     -Settings $settings -Description (
         'Runs the Merry Codex/Spotify bridge in the interactive user session. ' +
-        'The task restarts after unexpected failures and the runner rejects duplicates.'
+        'Failure restart plus a one-minute watchdog recover unexpected exits; ' +
+        'the runner rejects duplicates.'
     )
 
 Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
