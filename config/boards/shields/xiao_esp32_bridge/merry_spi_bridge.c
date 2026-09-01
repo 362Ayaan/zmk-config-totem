@@ -58,19 +58,21 @@ static const struct gpio_dt_spec ready_gpio = {
     .pin = MERRY_LINK_READY_PIN,
     .dt_flags = GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN,
 };
-static struct spi_cs_control link_cs = {
-    .gpio = {
-        .port = DEVICE_DT_GET(MERRY_LINK_GPIO),
-        .pin = MERRY_LINK_CS_PIN,
-        .dt_flags = GPIO_ACTIVE_LOW,
-    },
-    .delay = 0,
-};
 static const struct spi_config link_spi_config = {
     .frequency = MERRY_LINK_SPI_HZ,
     .operation = SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8),
     .slave = 0,
-    .cs = &link_cs,
+    /* Zephyr 4 embeds spi_cs_control in spi_config. Supplying a pointer here,
+     * as older Zephyr releases expected, corrupts cs.gpio.port and makes the
+     * bridge thread fail its device-ready check before its first transfer. */
+    .cs = {
+        .gpio = {
+            .port = DEVICE_DT_GET(MERRY_LINK_GPIO),
+            .pin = MERRY_LINK_CS_PIN,
+            .dt_flags = GPIO_ACTIVE_LOW,
+        },
+        .delay = 0,
+    },
 };
 
 static struct merry_link_frame spi_tx_frame __aligned(4);
@@ -129,7 +131,7 @@ static void bridge_thread(void *unused1, void *unused2, void *unused3) {
     ARG_UNUSED(unused3);
 
     if (!device_is_ready(upload_uart) || !device_is_ready(link_spi) ||
-        !gpio_is_ready_dt(&ready_gpio) || !gpio_is_ready_dt(&link_cs.gpio) ||
+        !gpio_is_ready_dt(&ready_gpio) || !gpio_is_ready_dt(&link_spi_config.cs.gpio) ||
         gpio_pin_configure_dt(&ready_gpio, GPIO_INPUT) < 0) {
         return;
     }
