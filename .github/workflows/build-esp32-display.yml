@@ -1,0 +1,41 @@
+name: Build ESP32-S3 display controller
+
+on:
+  push:
+    branches:
+      - codex/esp32-s3-display
+    paths:
+      - "esp32/display-controller/**"
+      - ".github/workflows/build-esp32-display.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build with ESP-IDF 5.5.5
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: esp32/display-controller
+          command: idf.py build && idf.py merge-bin -o xiao-esp32s3-display-merged.bin
+
+      - name: Archive flashable firmware and build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiao-esp32s3-display
+          if-no-files-found: error
+          path: |
+            esp32/display-controller/build/xiao-esp32s3-display-merged.bin
+            esp32/display-controller/build/merry_display_controller.bin
+            esp32/display-controller/build/bootloader/bootloader.bin
+            esp32/display-controller/build/partition_table/partition-table.bin
+            esp32/display-controller/build/flash_args
+            esp32/display-controller/build/project_description.json
