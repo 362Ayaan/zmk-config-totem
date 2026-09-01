@@ -1,0 +1,86 @@
+{
+  "source": "assets\\merry\\merry-source.webp",
+  "format": "MPF5",
+  "version": 1,
+  "frame_width": 216,
+  "frame_height": 234,
+  "frame_count": 30,
+  "animation_count": 5,
+  "pixel_format": "RGB565 little-endian",
+  "bytes_per_frame": 101088,
+  "pack_bytes": 3032984,
+  "pack_crc32": "f17cca6f",
+  "content_crc32": "03712e46",
+  "animations": [
+    {
+      "id": 0,
+      "name": "idle",
+      "frames": 6,
+      "loop": true,
+      "durations_ms": [
+        280,
+        110,
+        110,
+        140,
+        140,
+        320
+      ]
+    },
+    {
+      "id": 1,
+      "name": "running",
+      "frames": 6,
+      "loop": true,
+      "durations_ms": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        220
+      ]
+    },
+    {
+      "id": 2,
+      "name": "needs-input",
+      "frames": 6,
+      "loop": true,
+      "durations_ms": [
+        150,
+        150,
+        150,
+        150,
+        150,
+        260
+      ]
+    },
+    {
+      "id": 3,
+      "name": "completed",
+      "frames": 4,
+      "loop": false,
+      "durations_ms": [
+        140,
+        140,
+        140,
+        280
+      ]
+    },
+    {
+      "id": 4,
+      "name": "blocked",
+      "frames": 8,
+      "loop": false,
+      "durations_ms": [
+        140,
+        140,
+        140,
+        140,
+        140,
+        140,
+        140,
+        240
+      ]
+    }
+  ]
+}

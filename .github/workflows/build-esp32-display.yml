@@ -37,5 +37,6 @@ jobs:
             esp32/display-controller/build/merry_display_controller.bin
             esp32/display-controller/build/bootloader/bootloader.bin
             esp32/display-controller/build/partition_table/partition-table.bin
+            esp32/display-controller/build/assets.bin
             esp32/display-controller/build/flash_args
             esp32/display-controller/build/project_description.json
