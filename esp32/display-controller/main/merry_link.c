@@ -129,7 +129,9 @@ static void link_task(void *unused) {
         ESP_ERROR_CHECK(spi_slave_queue_trans(SPI3_HOST, &transaction, portMAX_DELAY));
         ready_set(outgoing_pending || ack_notification ||
                   xStreamBufferBytesAvailable(outgoing_stream) != 0);
-        ESP_ERROR_CHECK(spi_slave_get_trans_result(SPI3_HOST, &transaction, portMAX_DELAY));
+        spi_slave_transaction_t *completed = NULL;
+        ESP_ERROR_CHECK(spi_slave_get_trans_result(SPI3_HOST, &completed, portMAX_DELAY));
+        ESP_ERROR_CHECK(completed == &transaction ? ESP_OK : ESP_ERR_INVALID_STATE);
         ready_set(false);
         ack_notification = false;
 

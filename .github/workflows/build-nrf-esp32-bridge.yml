@@ -1,0 +1,63 @@
+name: Build nRF ESP32 bridge diagnostic
+
+on:
+  push:
+    branches:
+      - codex/esp32-s3-display
+    paths:
+      - "config/boards/shields/xiao_esp32_bridge/**"
+      - "config/boards/shields/totem/**"
+      - "config/west.yml"
+      - "build.yaml"
+      - ".github/workflows/build-nrf-esp32-bridge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: zmkfirmware/zmk-build-arm:stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize ZMK workspace
+        shell: bash
+        run: |
+          west init -l config
+          west update --fetch-opt=--filter=tree:0
+          west zephyr-export
+
+      - name: Build bridge firmware
+        shell: bash
+        run: |
+          set -o pipefail
+          west build -s zmk/app -d /tmp/nrf-esp32-bridge -b "xiao_ble//zmk" -- \
+            -DZMK_CONFIG="$GITHUB_WORKSPACE/config" \
+            -DSHIELD="totem_dongle xiao_esp32_bridge" 2>&1 | tee nrf-bridge-build.log
+
+      - name: Surface compiler diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          log='nrf-bridge-build.log'
+          if [[ -f "$log" ]]; then
+            message=$(grep -E '(^|[[:space:]])(error:|fatal error:|CMake Error|devicetree error|warning:.*was assigned|FAILED:)' "$log" | tail -n 30 | sed 's/%/%25/g' | paste -sd ' | ' -)
+            [[ -n "$message" ]] || message=$(tail -n 30 "$log" | sed 's/%/%25/g' | paste -sd ' | ' -)
+            echo "::error title=nRF bridge compiler diagnostics::$message"
+          fi
+
+      - name: Archive bridge firmware and build log
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dongle-esp32-bridge
+          if-no-files-found: error
+          path: |
+            /tmp/nrf-esp32-bridge/zephyr/zmk.uf2
+            /tmp/nrf-esp32-bridge/zephyr/.config
+            /tmp/nrf-esp32-bridge/zephyr/zephyr.dts
+            nrf-bridge-build.log
