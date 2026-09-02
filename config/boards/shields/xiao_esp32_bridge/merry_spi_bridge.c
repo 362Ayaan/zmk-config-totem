@@ -23,7 +23,7 @@
 #define MERRY_LINK_FLAG_PAYLOAD BIT(0)
 #define MERRY_LINK_FLAG_ACK BIT(1)
 #define MERRY_LINK_PAYLOAD_SIZE 512u
-#define MERRY_LINK_SPI_HZ 8000000u
+#define MERRY_LINK_SPI_HZ 2000000u
 #define MERRY_LINK_CS_PIN 4u    /* XIAO D4 / P0.04 */
 #define MERRY_LINK_READY_PIN 5u /* XIAO D5 / P0.05 */
 
@@ -71,7 +71,7 @@ static const struct spi_config link_spi_config = {
             .pin = MERRY_LINK_CS_PIN,
             .dt_flags = GPIO_ACTIVE_LOW,
         },
-        .delay = 0,
+        .delay = 2,
     },
 };
 
@@ -185,6 +185,11 @@ static void bridge_thread(void *unused1, void *unused2, void *unused3) {
             k_sleep(K_MSEC(2));
             continue;
         }
+        /* The ESP slave queues one transaction at a time. Give its task time
+         * to validate this frame and queue the next DMA descriptor before a
+         * retry or ACK exchange; otherwise a pending USB payload can make the
+         * nRF assert CS again while the ESP has no transaction armed. */
+        k_sleep(K_MSEC(1));
         ack_pending = false;
 
         if (!frame_valid(&spi_rx_frame)) {
