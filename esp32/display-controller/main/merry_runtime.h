@@ -37,6 +37,14 @@ enum merry_host_state {
     MERRY_HOST_DISPLAY_OFF = 2,
 };
 
+enum merry_display_mode {
+    MERRY_MODE_AUTO = 0,
+    MERRY_MODE_SPOTIFY = 1,
+    MERRY_MODE_CODEX = 2,
+    MERRY_MODE_PET = 3,
+    MERRY_MODE_DASHBOARD = 4,
+};
+
 esp_err_t merry_runtime_init(void);
 void merry_runtime_attach_renderer(TaskHandle_t renderer);
 
@@ -49,6 +57,10 @@ uint8_t merry_runtime_media_state(void);
 bool merry_runtime_set_media(uint8_t state, uint32_t ttl_ms);
 uint8_t merry_runtime_host_state(void);
 bool merry_runtime_set_host(uint8_t state, uint32_t ttl_ms);
+bool merry_runtime_set_config(uint8_t mode, uint8_t brightness,
+                              uint32_t screen_off_ms);
+uint8_t merry_runtime_display_mode(void);
+uint8_t merry_runtime_brightness(void);
 
 void merry_runtime_set_keyboard(uint32_t activity_counter, uint8_t layer,
                                 uint8_t modifiers, uint8_t battery_left,

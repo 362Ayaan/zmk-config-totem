@@ -21,6 +21,8 @@
 #define MEDIA_STATE_RESPONSE_MAGIC 0x31414d4du /* MMA1 */
 #define HOST_STATE_MAGIC 0x3153484du           /* MHS1 */
 #define HOST_STATE_RESPONSE_MAGIC 0x3141484du  /* MHA1 */
+#define CONFIG_MAGIC 0x3146434du               /* MCF1 */
+#define CONFIG_RESPONSE_MAGIC 0x3141464du      /* MFA1 */
 
 #define PROTOCOL_VERSION 1u
 #define MIN_TTL_MS 5000u
@@ -80,17 +82,30 @@ struct media_response {
     uint16_t status;
 } __attribute__((packed));
 
+struct config_request {
+    uint8_t version;
+    uint8_t mode;
+    uint8_t brightness;
+    uint8_t reserved;
+    uint32_t screen_off_ms;
+    uint16_t sequence;
+    uint16_t reserved16;
+    uint32_t crc32;
+} __attribute__((packed));
+
 _Static_assert(sizeof(struct state_request) == 12, "state request changed");
 _Static_assert(sizeof(struct state_response) == 8, "state response changed");
 _Static_assert(sizeof(struct media_upload_header) == 20, "media header changed");
 _Static_assert(sizeof(struct chunk_header) == 8, "chunk header changed");
 _Static_assert(sizeof(struct media_response) == 8, "media response changed");
+_Static_assert(sizeof(struct config_request) == 16, "config request changed");
 
 static uint32_t pending_magic;
 
 static bool is_command(uint32_t magic) {
     return magic == CODEX_STATE_MAGIC || magic == MEDIA_UPLOAD_MAGIC ||
-           magic == MEDIA_STATE_MAGIC || magic == HOST_STATE_MAGIC;
+           magic == MEDIA_STATE_MAGIC || magic == HOST_STATE_MAGIC ||
+           magic == CONFIG_MAGIC;
 }
 
 static bool read_exact(void *destination, size_t size, uint32_t timeout_ms) {
@@ -242,6 +257,22 @@ static void handle_host_state(void) {
                         merry_runtime_host_state(), request.sequence);
 }
 
+static void handle_config(void) {
+    struct config_request request = {0};
+    if (!read_exact(&request, sizeof(request), PACKET_TIMEOUT_MS) ||
+        request.version != PROTOCOL_VERSION || request.reserved != 0 ||
+        request.reserved16 != 0 ||
+        merry_crc32(&request, offsetof(struct config_request, crc32)) != request.crc32) {
+        send_state_response(CONFIG_RESPONSE_MAGIC, STATUS_BAD_HEADER,
+                            merry_runtime_display_mode(), request.sequence);
+        return;
+    }
+    const bool accepted = merry_runtime_set_config(request.mode, request.brightness,
+                                                   request.screen_off_ms);
+    send_state_response(CONFIG_RESPONSE_MAGIC, accepted ? STATUS_OK : STATUS_BAD_STATE,
+                        merry_runtime_display_mode(), request.sequence);
+}
+
 static void send_media_response(uint16_t sequence, uint16_t status) {
     const struct media_response response = {
         .magic = MEDIA_RESPONSE_MAGIC,
@@ -323,6 +354,8 @@ static void protocol_task(void *unused) {
             handle_host_state();
         } else if (command == MEDIA_UPLOAD_MAGIC) {
             handle_media_upload();
+        } else if (command == CONFIG_MAGIC) {
+            handle_config();
         }
     }
 }

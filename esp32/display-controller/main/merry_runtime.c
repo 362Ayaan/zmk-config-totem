@@ -15,7 +15,7 @@
 #define MERRY_PACK_VERSION 1u
 #define MERRY_PACK_PATH "/assets/merry-full.petpack"
 #define MERRY_ANIMATION_COUNT 5u
-#define MERRY_SCREEN_OFF_DELAY_MS 300000u
+#define MERRY_DEFAULT_SCREEN_OFF_DELAY_MS 300000u
 #define MERRY_DEFAULT_MEDIA_TTL_MS 12000u
 #define MERRY_KEYBOARD_ACTIVE_MS 20000u
 
@@ -82,6 +82,9 @@ struct merry_context {
     char keyboard_layer_name[10];
     bool keyboard_seen;
     int64_t keyboard_active_until;
+    uint32_t screen_off_delay_ms;
+    uint8_t display_mode;
+    uint8_t brightness;
 };
 
 static struct merry_context runtime;
@@ -217,7 +220,11 @@ esp_err_t merry_runtime_init(void) {
     runtime.codex_state = MERRY_ANIM_IDLE;
     runtime.media_state = MERRY_MEDIA_NONE;
     runtime.host_state = MERRY_HOST_AFK;
-    runtime.screen_off_at = monotonic_ms() + MERRY_SCREEN_OFF_DELAY_MS;
+    runtime.screen_off_delay_ms = MERRY_DEFAULT_SCREEN_OFF_DELAY_MS;
+    runtime.display_mode = MERRY_MODE_AUTO;
+    runtime.brightness = 100u;
+    snprintf(runtime.keyboard_layer_name, sizeof(runtime.keyboard_layer_name), "BASE");
+    runtime.screen_off_at = monotonic_ms() + runtime.screen_off_delay_ms;
     return ESP_OK;
 }
 
@@ -237,13 +244,17 @@ static void expire_states_locked(int64_t now) {
     if (runtime.host_expires_at > 0 && now >= runtime.host_expires_at) {
         runtime.host_state = MERRY_HOST_AFK;
         runtime.host_expires_at = 0;
-        runtime.screen_off_at = now + MERRY_SCREEN_OFF_DELAY_MS;
+        runtime.screen_off_at = now + runtime.screen_off_delay_ms;
     }
 }
 
 static bool display_should_be_on_locked(int64_t now) {
     if (runtime.host_state == MERRY_HOST_DISPLAY_OFF) {
         return false;
+    }
+    if (runtime.display_mode == MERRY_MODE_PET ||
+        runtime.display_mode == MERRY_MODE_DASHBOARD) {
+        return true;
     }
     if (now < runtime.keyboard_active_until || runtime.codex_state != MERRY_ANIM_IDLE ||
         runtime.media_state == MERRY_MEDIA_PLAYING) {
@@ -271,7 +282,7 @@ void merry_runtime_set_keyboard(uint32_t activity_counter, uint8_t layer,
              layer_name != NULL && layer_name[0] != '\0' ? layer_name : "BASE");
     if (activity_changed) {
         runtime.keyboard_active_until = now + MERRY_KEYBOARD_ACTIVE_MS;
-        runtime.screen_off_at = now + MERRY_SCREEN_OFF_DELAY_MS;
+        runtime.screen_off_at = now + runtime.screen_off_delay_ms;
     }
     ++runtime.keyboard_generation;
     xSemaphoreGive(runtime.lock);
@@ -333,13 +344,44 @@ bool merry_runtime_set_host(uint8_t state, uint32_t ttl_ms) {
     runtime.host_state = state;
     runtime.host_expires_at = state == MERRY_HOST_AFK ? 0 : now + ttl_ms;
     if (state == MERRY_HOST_ACTIVE) {
-        runtime.screen_off_at = now + MERRY_SCREEN_OFF_DELAY_MS;
+        runtime.screen_off_at = now + runtime.screen_off_delay_ms;
     } else if (state == MERRY_HOST_AFK && previous != MERRY_HOST_AFK) {
-        runtime.screen_off_at = now + MERRY_SCREEN_OFF_DELAY_MS;
+        runtime.screen_off_at = now + runtime.screen_off_delay_ms;
     }
     xSemaphoreGive(runtime.lock);
     wake_renderer();
     return true;
+}
+
+bool merry_runtime_set_config(uint8_t mode, uint8_t brightness,
+                              uint32_t screen_off_ms) {
+    if (mode > MERRY_MODE_DASHBOARD || brightness < 10u || brightness > 100u ||
+        screen_off_ms < 30000u || screen_off_ms > 3600000u) {
+        return false;
+    }
+    const int64_t now = monotonic_ms();
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    runtime.display_mode = mode;
+    runtime.brightness = brightness;
+    runtime.screen_off_delay_ms = screen_off_ms;
+    runtime.screen_off_at = now + screen_off_ms;
+    xSemaphoreGive(runtime.lock);
+    wake_renderer();
+    return true;
+}
+
+uint8_t merry_runtime_display_mode(void) {
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    const uint8_t mode = runtime.display_mode;
+    xSemaphoreGive(runtime.lock);
+    return mode;
+}
+
+uint8_t merry_runtime_brightness(void) {
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    const uint8_t brightness = runtime.brightness;
+    xSemaphoreGive(runtime.lock);
+    return brightness;
 }
 
 bool merry_runtime_media_upload_begin(void) {
@@ -632,9 +674,26 @@ uint32_t merry_runtime_render(uint16_t *destination, bool *changed, bool *screen
     expire_states_locked(now);
     const uint8_t codex = runtime.codex_state;
     const uint8_t media = runtime.media_state;
-    const bool keyboard_mode = runtime.keyboard_seen && now < runtime.keyboard_active_until;
-    const bool media_mode = runtime.media_valid && codex != MERRY_ANIM_RUNNING &&
-                            (media == MERRY_MEDIA_PLAYING || media == MERRY_MEDIA_PAUSED);
+    const uint8_t display_mode = runtime.display_mode;
+    bool keyboard_mode = runtime.keyboard_seen && now < runtime.keyboard_active_until;
+    bool media_mode = runtime.media_valid && codex != MERRY_ANIM_RUNNING &&
+                      (media == MERRY_MEDIA_PLAYING || media == MERRY_MEDIA_PAUSED);
+    uint8_t selected_codex = codex;
+    if (display_mode == MERRY_MODE_SPOTIFY) {
+        keyboard_mode = false;
+        selected_codex = MERRY_ANIM_IDLE;
+    } else if (display_mode == MERRY_MODE_CODEX) {
+        keyboard_mode = false;
+        media_mode = false;
+    } else if (display_mode == MERRY_MODE_PET) {
+        keyboard_mode = false;
+        media_mode = false;
+        selected_codex = MERRY_ANIM_IDLE;
+    } else if (display_mode == MERRY_MODE_DASHBOARD) {
+        keyboard_mode = true;
+        media_mode = false;
+        selected_codex = MERRY_ANIM_IDLE;
+    }
     const uint32_t generation = runtime.media_generation;
     const uint32_t keyboard_generation = runtime.keyboard_generation;
     const bool on = display_should_be_on_locked(now);
@@ -674,12 +733,12 @@ uint32_t merry_runtime_render(uint16_t *destination, bool *changed, bool *screen
         return 100;
     }
 
-    const struct merry_animation_desc *animation = &runtime.animations[codex];
-    if (previous_mode != RENDER_PET || previous_animation != codex) {
+    const struct merry_animation_desc *animation = &runtime.animations[selected_codex];
+    if (previous_mode != RENDER_PET || previous_animation != selected_codex) {
         animation_frame = 0;
         frame_deadline = now;
         previous_mode = RENDER_PET;
-        previous_animation = codex;
+        previous_animation = selected_codex;
     }
     if (now >= frame_deadline) {
         const uint16_t absolute_frame = animation->first_frame + animation_frame;

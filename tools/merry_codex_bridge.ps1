@@ -24,6 +24,15 @@ param(
     [ValidateRange(5, 300)]
     [int]$HostActivitySeconds = 30,
 
+    [ValidateSet('Auto', 'Spotify', 'Codex', 'Pet', 'Dashboard')]
+    [string]$Mode = 'Auto',
+
+    [ValidateRange(10, 100)]
+    [int]$Brightness = 100,
+
+    [ValidateRange(30, 3600)]
+    [int]$ScreenOffSeconds = 300,
+
     [switch]$DryRun,
     [switch]$Once,
     [switch]$SelfTest,
@@ -35,8 +44,9 @@ Set-StrictMode -Version Latest
 
 $windowsDesktop = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
     $PSVersionTable.PSEdition -eq 'Desktop'
-$spotifyEnabled = -not $DisableSpotify -and $windowsDesktop
-if (-not $DisableSpotify -and -not $windowsDesktop) {
+$spotifyEnabled = -not $DisableSpotify -and $Mode -in @('Auto', 'Spotify') -and
+    $windowsDesktop
+if (-not $DisableSpotify -and $Mode -in @('Auto', 'Spotify') -and -not $windowsDesktop) {
     Write-Warning 'Spotify artwork requires Windows PowerShell 5.1; Spotify support is disabled in this host.'
 }
 if ($windowsDesktop) {
@@ -84,17 +94,21 @@ $mediaStateMagic = [uint32]0x31534d4d    # MMS1
 $mediaStateResponseMagic = [uint32]0x31414d4d # MMA1
 $hostStateMagic = [uint32]0x3153484d        # MHS1
 $hostStateResponseMagic = [uint32]0x3141484d # MHA1
+$configMagic = [uint32]0x3146434d             # MCF1
+$configResponseMagic = [uint32]0x3141464d     # MFA1
 $mediaProtocolVersion = [byte]1
 $mediaWidth = [uint16]202
 $mediaHeight = [uint16]220
 $mediaBytes = 202 * 220 * 2
 $mediaStateIds = @{ None = 0; Playing = 1; Paused = 2 }
 $hostStateIds = @{ AFK = 0; Active = 1; DisplayOff = 2 }
+$modeIds = @{ Auto = 0; Spotify = 1; Codex = 2; Pet = 3; Dashboard = 4 }
 $script:requestId = 0
 $script:sequence = [uint16]0
 $script:mediaSequence = [uint16]0
 $script:mediaGeneration = [uint32]0
 $script:hostSequence = [uint16]0
+$script:configSequence = [uint16]0
 $script:pipe = $null
 $script:toolCatalog = @{}
 $script:serial = $null
@@ -481,6 +495,41 @@ function Invoke-DongleHostState {
     $script:hostSequence = [uint16](($script:hostSequence + 1) -band 0xffff)
 }
 
+function Invoke-DongleConfig {
+    param([System.IO.Ports.SerialPort]$Serial)
+
+    $body = [byte[]]::new(16)
+    $body[0] = $mediaProtocolVersion
+    $body[1] = [byte]$modeIds[$Mode]
+    $body[2] = [byte]$Brightness
+    $body[3] = 0
+    [BitConverter]::GetBytes([uint32]($ScreenOffSeconds * 1000)).CopyTo($body, 4)
+    [BitConverter]::GetBytes($script:configSequence).CopyTo($body, 8)
+    [BitConverter]::GetBytes([uint16]0).CopyTo($body, 10)
+    [byte[]]$crcInput = $body[0..11]
+    [BitConverter]::GetBytes([MerryCodexCrc32]::Compute($crcInput)).CopyTo($body, 12)
+    $request = [byte[]]::new(20)
+    [BitConverter]::GetBytes($configMagic).CopyTo($request, 0)
+    $body.CopyTo($request, 4)
+    $Serial.Write($request, 0, $request.Length)
+
+    $response = [byte[]]::new(8)
+    $offset = 0
+    while ($offset -lt $response.Length) {
+        $offset += $Serial.Read($response, $offset, $response.Length - $offset)
+    }
+    $magic = [BitConverter]::ToUInt32($response, 0)
+    $status = $response[4]
+    $applied = $response[5]
+    $sequence = [BitConverter]::ToUInt16($response, 6)
+    if ($magic -ne $configResponseMagic -or $status -ne 0 -or
+        $sequence -ne $script:configSequence -or $applied -ne $modeIds[$Mode]) {
+        throw ('Invalid config acknowledgement: magic=0x{0:x8}, status={1}, mode={2}, sequence={3}.' -f
+            $magic, $status, $applied, $sequence)
+    }
+    $script:configSequence = [uint16](($script:configSequence + 1) -band 0xffff)
+}
+
 function Connect-Dongle {
     Disconnect-Dongle
     $candidates = @(Get-DongleCandidates)
@@ -500,6 +549,7 @@ function Connect-Dongle {
             $serial.DiscardInBuffer()
             $serial.DiscardOutBuffer()
             Invoke-DongleState -Serial $serial -State 'Idle'
+            Invoke-DongleConfig -Serial $serial
             $script:serial = $serial
             $script:selectedPort = $candidate
             return
@@ -531,6 +581,10 @@ function Invoke-SelfTest {
     if ($hostStateMagic -ne [uint32]0x3153484d -or $HostActivitySeconds -lt 5 -or
         $hostStateIds.Count -ne 3 -or $hostStateIds.DisplayOff -ne 2) {
         throw 'Host-activity protocol self-test failed.'
+    }
+    if ($configMagic -ne [uint32]0x3146434d -or $modeIds.Count -ne 5 -or
+        $Brightness -lt 10 -or $ScreenOffSeconds -lt 30) {
+        throw 'Runtime configuration protocol self-test failed.'
     }
     if ((Get-MerryHostState -PowerBlanked $true -HostActive $true) -ne 'DisplayOff' -or
         (Get-MerryHostState -PowerBlanked $false -HostActive $true) -ne 'Active' -or
@@ -643,7 +697,8 @@ try {
         $fastPlaybackChanged = $rawPlayback.State -in @('Playing', 'Paused') -and
             $rawPlayback.State -ne $lastMediaState
 
-        if ($now -ge $nextCodexPoll -and -not $fastPlaybackChanged) {
+        if ($Mode -in @('Auto', 'Codex') -and $now -ge $nextCodexPoll -and
+            -not $fastPlaybackChanged) {
             try {
                 if ($null -eq $script:pipe -or -not $script:pipe.IsConnected) {
                     Connect-CodexPipe

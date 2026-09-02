@@ -55,8 +55,9 @@ static void backlight_init(void) {
     ESP_ERROR_CHECK(ledc_channel_config(&channel));
 }
 
-static void backlight_set(bool on) {
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, on ? 1023 : 0));
+static void backlight_set(bool on, uint8_t percent) {
+    const uint32_t duty = on ? ((uint32_t)percent * 1023u + 50u) / 100u : 0u;
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty));
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0));
 }
 
@@ -151,7 +152,8 @@ void app_main(void) {
         flush_frame(panel, frames[0]);
     }
     bool screen_power = requested_power;
-    backlight_set(screen_power);
+    uint8_t screen_brightness = merry_runtime_brightness();
+    backlight_set(screen_power, screen_brightness);
 
     ESP_LOGI(TAG, "Direct USB host protocol and keyboard status UART starting");
     /* Protocol responses and boot logs share native USB. Silence steady-state
@@ -165,15 +167,17 @@ void app_main(void) {
         uint16_t *frame = frames[frame_index & 1u];
         const uint32_t delay_ms =
             merry_runtime_render(frame, &changed, &requested_power);
-        if (requested_power != screen_power) {
+        const uint8_t requested_brightness = merry_runtime_brightness();
+        if (requested_power != screen_power || requested_brightness != screen_brightness) {
             if (requested_power) {
                 ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
-                backlight_set(true);
+                backlight_set(true, requested_brightness);
             } else {
-                backlight_set(false);
+                backlight_set(false, requested_brightness);
                 ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, false));
             }
             screen_power = requested_power;
+            screen_brightness = requested_brightness;
         }
         if (screen_power && changed) {
             flush_frame(panel, frame);
