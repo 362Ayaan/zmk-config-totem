@@ -328,16 +328,17 @@ static void protocol_task(void *unused) {
 }
 
 esp_err_t merry_protocol_start(void) {
-    const usb_serial_jtag_driver_config_t usb_config = {
-        .tx_buffer_size = 4096,
+    const usb_serial_jtag_driver_config_t config = {
+        .tx_buffer_size = 2048,
         .rx_buffer_size = 4096,
     };
-    esp_err_t err = usb_serial_jtag_driver_install(&usb_config);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    esp_err_t err = usb_serial_jtag_driver_install(&config);
+    if (err != ESP_OK) {
         return err;
     }
     if (xTaskCreatePinnedToCore(protocol_task, "merry-protocol", 6144, NULL, 8, NULL, 0) !=
         pdPASS) {
+        usb_serial_jtag_driver_uninstall();
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

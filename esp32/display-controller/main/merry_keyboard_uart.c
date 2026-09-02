@@ -96,8 +96,11 @@ esp_err_t merry_keyboard_uart_start(void) {
         uart_driver_delete(KEYBOARD_UART);
         return err;
     }
-    if (xTaskCreatePinnedToCore(keyboard_uart_task, "keyboard-uart", 3072, NULL, 9,
-                                NULL, 0) != pdPASS) {
+    /* Keep the keyboard link off the host-protocol core. It is intentionally
+     * lower priority than the USB parser so album uploads and ACKs cannot be
+     * delayed by a continuous stream of dashboard snapshots. */
+    if (xTaskCreatePinnedToCore(keyboard_uart_task, "keyboard-uart", 3072, NULL, 5,
+                                NULL, 1) != pdPASS) {
         uart_driver_delete(KEYBOARD_UART);
         return ESP_ERR_NO_MEM;
     }

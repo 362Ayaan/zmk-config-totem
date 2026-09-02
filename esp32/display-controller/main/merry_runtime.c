@@ -9,6 +9,7 @@
 #include "esp_spiffs.h"
 #include "esp_timer.h"
 #include "freertos/semphr.h"
+#include "generated_layer_labels.h"
 
 #define MERRY_PACK_MAGIC 0x3546504du /* MPF5 */
 #define MERRY_PACK_VERSION 1u
@@ -479,6 +480,33 @@ static uint16_t battery_colour(uint8_t level) {
     return rgb565(50, 215, 75);
 }
 
+static bool draw_antialiased_layer(uint16_t *frame, const char *name,
+                                   uint8_t red, uint8_t green, uint8_t blue) {
+    for (size_t index = 0; index < sizeof(merry_layer_labels) / sizeof(merry_layer_labels[0]);
+         ++index) {
+        const struct merry_layer_label *label = &merry_layer_labels[index];
+        if (strcmp(label->name, name) != 0) {
+            continue;
+        }
+        const int origin_x = (MERRY_LCD_WIDTH - label->width) / 2;
+        const int origin_y = 89 + (34 - label->height) / 2;
+        for (uint16_t y = 0; y < label->height; ++y) {
+            for (uint16_t x = 0; x < label->width; ++x) {
+                const uint8_t alpha = label->alpha[y * label->width + x];
+                if (alpha == 0) {
+                    continue;
+                }
+                put_pixel(frame, origin_x + x, origin_y + y,
+                          rgb565((uint8_t)((red * alpha + 127u) / 255u),
+                                 (uint8_t)((green * alpha + 127u) / 255u),
+                                 (uint8_t)((blue * alpha + 127u) / 255u)));
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 static void render_dashboard(uint16_t *destination) {
     struct {
         uint8_t modifiers;
@@ -512,9 +540,11 @@ static void render_dashboard(uint16_t *destination) {
     for (int y = 76; y < 138; ++y) {
         for (int x = 17; x < 21; ++x) put_pixel(destination, x, y, purple);
     }
-    const int layer_scale = strlen(state.layer_name) <= 5 ? 5 : 4;
-    draw_text(destination, (240 - text_width(state.layer_name, layer_scale)) / 2,
-              88, state.layer_name, layer_scale, purple);
+    if (!draw_antialiased_layer(destination, state.layer_name, 191, 90, 242)) {
+        const int layer_scale = strlen(state.layer_name) <= 5 ? 5 : 4;
+        draw_text(destination, (240 - text_width(state.layer_name, layer_scale)) / 2,
+                  88, state.layer_name, layer_scale, purple);
+    }
     for (int x = 20; x < 220; ++x) put_pixel(destination, x, 176, rule);
     const char *mods[3] = {"CTRL", "ALT", "SHIFT"};
     const uint8_t masks[3] = {0x11, 0x44, 0x22};
