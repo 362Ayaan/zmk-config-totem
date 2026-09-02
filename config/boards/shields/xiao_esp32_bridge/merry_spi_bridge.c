@@ -24,6 +24,7 @@
 #define MERRY_LINK_FLAG_ACK BIT(1)
 #define MERRY_LINK_PAYLOAD_SIZE 512u
 #define MERRY_LINK_SPI_HZ 2000000u
+#define MERRY_LINK_IDLE_POLL_MS 10
 #define MERRY_LINK_CS_PIN 4u    /* XIAO D4 / P0.04 */
 #define MERRY_LINK_READY_PIN 5u /* XIAO D5 / P0.05 */
 
@@ -146,6 +147,7 @@ static void bridge_thread(void *unused1, void *unused2, void *unused3) {
     bool ack_pending = false;
     bool outgoing_pending = false;
     size_t outgoing_size = 0;
+    int64_t next_idle_poll_at = 0;
 
     while (true) {
         if (!outgoing_pending) {
@@ -157,8 +159,11 @@ static void bridge_thread(void *unused1, void *unused2, void *unused3) {
             outgoing_pending = outgoing_size != 0;
         }
 
-        const bool esp_requests_clock = gpio_pin_get_dt(&ready_gpio) > 0;
-        if (!outgoing_pending && !ack_pending && !esp_requests_clock) {
+        const bool esp_transaction_armed = gpio_pin_get_dt(&ready_gpio) > 0;
+        const int64_t now = k_uptime_get();
+        const bool local_exchange_needed = outgoing_pending || ack_pending;
+        const bool idle_poll_due = now >= next_idle_poll_at;
+        if (!esp_transaction_armed || (!local_exchange_needed && !idle_poll_due)) {
             k_sleep(K_MSEC(1));
             continue;
         }
@@ -185,6 +190,7 @@ static void bridge_thread(void *unused1, void *unused2, void *unused3) {
             k_sleep(K_MSEC(2));
             continue;
         }
+        next_idle_poll_at = k_uptime_get() + MERRY_LINK_IDLE_POLL_MS;
         /* The ESP slave queues one transaction at a time. Give its task time
          * to validate this frame and queue the next DMA descriptor before a
          * retry or ACK exchange; otherwise a pending USB payload can make the

@@ -95,7 +95,6 @@ static void link_task(void *unused) {
     uint16_t last_rx_sequence = 0;
     bool remote_known = false;
     bool have_rx_ack = false;
-    bool ack_notification = false;
     bool outgoing_pending = false;
     size_t outgoing_size = 0;
     uint32_t transaction_count = 0;
@@ -137,13 +136,13 @@ static void link_task(void *unused) {
             .rx_buffer = &spi_rx_frame,
         };
         ESP_ERROR_CHECK(spi_slave_queue_trans(SPI3_HOST, &transaction, portMAX_DELAY));
-        ready_set(outgoing_pending || ack_notification ||
-                  xStreamBufferBytesAvailable(outgoing_stream) != 0);
+        /* READY is a transaction-armed handshake, not a data-available flag.
+         * The nRF must never assert CS until this DMA descriptor is queued. */
+        ready_set(true);
         spi_slave_transaction_t *completed = NULL;
         ESP_ERROR_CHECK(spi_slave_get_trans_result(SPI3_HOST, &completed, portMAX_DELAY));
         ESP_ERROR_CHECK(completed == &transaction ? ESP_OK : ESP_ERR_INVALID_STATE);
         ready_set(false);
-        ack_notification = false;
 
         ++transaction_count;
         if (transaction_count <= 4u || (transaction_count % 256u) == 0u) {
@@ -204,11 +203,9 @@ static void link_task(void *unused) {
             continue;
         }
         if (have_rx_ack && received->sequence == last_rx_sequence) {
-            ack_notification = true;
             continue;
         }
         if (received->sequence != expected_rx_sequence) {
-            ack_notification = have_rx_ack;
             continue;
         }
         if (xStreamBufferSend(incoming_stream, spi_rx_frame.payload,
@@ -219,7 +216,6 @@ static void link_task(void *unused) {
         last_rx_sequence = received->sequence;
         expected_rx_sequence = (uint16_t)(received->sequence + 1u);
         have_rx_ack = true;
-        ack_notification = true;
     }
 }
 
@@ -302,9 +298,8 @@ bool merry_link_write(const void *source, size_t size, uint32_t timeout_ms) {
         }
         offset += written;
     }
-    /* A transaction may already be queued with an empty TX frame. Raising READY
-     * asks the master to clock that harmless frame; the following transaction
-     * will then contain these bytes. */
-    ready_set(true);
+    /* The link task owns READY. If an empty transaction is already armed, the
+     * master's idle poll clocks it and the following queued frame carries this
+     * response. This avoids claiming READY before a DMA descriptor exists. */
     return true;
 }
