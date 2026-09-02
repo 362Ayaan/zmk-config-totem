@@ -50,6 +50,7 @@ namespace MerryDongle
         private static volatile bool ShutdownRequested;
         private static volatile bool RestartRequested;
         private static volatile bool BridgeRunning;
+        private static volatile bool BridgeConnected;
         private static PowerShell ActivePowerShell;
         private static Thread BridgeThread;
         private static string LastError = "none";
@@ -113,6 +114,7 @@ namespace MerryDongle
                             !String.IsNullOrWhiteSpace(config.Port))
                             shell.AddParameter("Port", config.Port);
                         BridgeRunning = true;
+                        BridgeConnected = false;
                         LastError = "none";
                         Log(String.Format("Bridge starting: mode={0}, brightness={1}, timeout={2}, port={3}",
                             config.Mode, config.Brightness, config.ScreenOffSeconds, config.Port));
@@ -132,6 +134,7 @@ namespace MerryDongle
                 finally
                 {
                     BridgeRunning = false;
+                    BridgeConnected = false;
                     lock (Gate) { ActivePowerShell = null; }
                 }
                 if (ShutdownRequested) break;
@@ -160,7 +163,10 @@ namespace MerryDongle
             };
             shell.Streams.Information.DataAdded += delegate(object sender, DataAddedEventArgs args)
             {
-                Log(shell.Streams.Information[args.Index].ToString());
+                string message = shell.Streams.Information[args.Index].ToString();
+                if (message.StartsWith("Merry dongle connected", StringComparison.Ordinal))
+                    BridgeConnected = true;
+                Log(message);
             };
         }
 
@@ -200,8 +206,8 @@ namespace MerryDongle
                 return "OK host shutting down";
             }
             MerryConfig config = MerryConfig.Load(ConfigPath);
-            return String.Format("OK running={0};mode={1};brightness={2};timeout={3};port={4};lastError={5}",
-                BridgeRunning, config.Mode, config.Brightness, config.ScreenOffSeconds,
+            return String.Format("OK running={0};connected={1};mode={2};brightness={3};timeout={4};port={5};lastError={6}",
+                BridgeRunning, BridgeConnected, config.Mode, config.Brightness, config.ScreenOffSeconds,
                 config.Port, LastError.Replace(';', ','));
         }
 

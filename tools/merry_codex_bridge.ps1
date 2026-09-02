@@ -287,9 +287,15 @@ function Get-DongleCandidates {
     if (-not [string]::IsNullOrWhiteSpace($Port)) {
         return @($Port)
     }
-    return @(Get-CimInstance Win32_SerialPort |
-        Where-Object PNPDeviceID -Match '^USB\\VID_1D50&PID_615E' |
-        Select-Object -ExpandProperty DeviceID)
+    $ports = @(Get-CimInstance Win32_SerialPort)
+    # The finished two-board dongle talks directly to the ESP32-S3 native USB
+    # port. Keep the nRF VID as a lower-priority legacy fallback.
+    return @(
+        $ports | Where-Object PNPDeviceID -Match '^USB\\VID_303A&PID_1001' |
+            Select-Object -ExpandProperty DeviceID
+        $ports | Where-Object PNPDeviceID -Match '^USB\\VID_1D50&PID_615E' |
+            Select-Object -ExpandProperty DeviceID
+    )
 }
 
 function Disconnect-Dongle {
