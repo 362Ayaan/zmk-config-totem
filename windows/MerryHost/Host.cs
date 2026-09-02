@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 using System.Management.Automation;
+using System.Management.Automation.Runspaces;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
@@ -95,8 +96,13 @@ namespace MerryDongle
                 DateTime started = DateTime.UtcNow;
                 try
                 {
+                    InitialSessionState sessionState = InitialSessionState.CreateDefault();
+                    sessionState.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.Bypass;
+                    using (Runspace runspace = RunspaceFactory.CreateRunspace(sessionState))
                     using (PowerShell shell = PowerShell.Create())
                     {
+                        runspace.Open();
+                        shell.Runspace = runspace;
                         lock (Gate) { ActivePowerShell = shell; }
                         AttachStreams(shell);
                         shell.AddCommand(ScriptPath)
