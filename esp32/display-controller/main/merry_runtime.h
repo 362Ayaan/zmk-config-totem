@@ -50,6 +50,11 @@ bool merry_runtime_set_media(uint8_t state, uint32_t ttl_ms);
 uint8_t merry_runtime_host_state(void);
 bool merry_runtime_set_host(uint8_t state, uint32_t ttl_ms);
 
+void merry_runtime_set_keyboard(uint32_t activity_counter, uint8_t layer,
+                                uint8_t modifiers, uint8_t battery_left,
+                                uint8_t battery_dial, uint8_t battery_right,
+                                const char *layer_name);
+
 bool merry_runtime_media_upload_begin(void);
 bool merry_runtime_media_upload_write(size_t offset, const uint8_t *data, size_t size);
 bool merry_runtime_media_upload_finish(uint32_t expected_crc, uint8_t state);

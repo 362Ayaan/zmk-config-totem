@@ -2,7 +2,7 @@
 
 if SHIELD_XIAO_ESP32_BRIDGE
 
-config SPI
+config SERIAL
     default y
 
 endif

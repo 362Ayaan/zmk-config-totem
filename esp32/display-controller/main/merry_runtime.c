@@ -16,6 +16,7 @@
 #define MERRY_ANIMATION_COUNT 5u
 #define MERRY_SCREEN_OFF_DELAY_MS 300000u
 #define MERRY_DEFAULT_MEDIA_TTL_MS 12000u
+#define MERRY_KEYBOARD_ACTIVE_MS 20000u
 
 struct merry_pack_header {
     uint32_t magic;
@@ -72,6 +73,14 @@ struct merry_context {
     int64_t media_expires_at;
     int64_t host_expires_at;
     int64_t screen_off_at;
+    uint32_t keyboard_activity_counter;
+    uint32_t keyboard_generation;
+    uint8_t keyboard_layer;
+    uint8_t keyboard_modifiers;
+    uint8_t keyboard_batteries[3];
+    char keyboard_layer_name[10];
+    bool keyboard_seen;
+    int64_t keyboard_active_until;
 };
 
 static struct merry_context runtime;
@@ -235,10 +244,37 @@ static bool display_should_be_on_locked(int64_t now) {
     if (runtime.host_state == MERRY_HOST_DISPLAY_OFF) {
         return false;
     }
-    if (runtime.codex_state != MERRY_ANIM_IDLE || runtime.media_state == MERRY_MEDIA_PLAYING) {
+    if (now < runtime.keyboard_active_until || runtime.codex_state != MERRY_ANIM_IDLE ||
+        runtime.media_state == MERRY_MEDIA_PLAYING) {
         return true;
     }
     return runtime.host_state == MERRY_HOST_ACTIVE || now < runtime.screen_off_at;
+}
+
+void merry_runtime_set_keyboard(uint32_t activity_counter, uint8_t layer,
+                                uint8_t modifiers, uint8_t battery_left,
+                                uint8_t battery_dial, uint8_t battery_right,
+                                const char *layer_name) {
+    const int64_t now = monotonic_ms();
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    const bool activity_changed = !runtime.keyboard_seen ||
+                                  activity_counter != runtime.keyboard_activity_counter;
+    runtime.keyboard_seen = true;
+    runtime.keyboard_activity_counter = activity_counter;
+    runtime.keyboard_layer = layer;
+    runtime.keyboard_modifiers = modifiers;
+    runtime.keyboard_batteries[0] = battery_left;
+    runtime.keyboard_batteries[1] = battery_dial;
+    runtime.keyboard_batteries[2] = battery_right;
+    snprintf(runtime.keyboard_layer_name, sizeof(runtime.keyboard_layer_name), "%s",
+             layer_name != NULL && layer_name[0] != '\0' ? layer_name : "BASE");
+    if (activity_changed) {
+        runtime.keyboard_active_until = now + MERRY_KEYBOARD_ACTIVE_MS;
+        runtime.screen_off_at = now + MERRY_SCREEN_OFF_DELAY_MS;
+    }
+    ++runtime.keyboard_generation;
+    xSemaphoreGive(runtime.lock);
+    wake_renderer();
 }
 
 uint8_t merry_runtime_codex_state(void) {
@@ -375,6 +411,120 @@ static void put_pixel(uint16_t *frame, int x, int y, uint16_t colour) {
     }
 }
 
+static const uint8_t font_digits[10][5] = {
+    {0x3e, 0x51, 0x49, 0x45, 0x3e}, {0x00, 0x42, 0x7f, 0x40, 0x00},
+    {0x42, 0x61, 0x51, 0x49, 0x46}, {0x21, 0x41, 0x45, 0x4b, 0x31},
+    {0x18, 0x14, 0x12, 0x7f, 0x10}, {0x27, 0x45, 0x45, 0x45, 0x39},
+    {0x3c, 0x4a, 0x49, 0x49, 0x30}, {0x01, 0x71, 0x09, 0x05, 0x03},
+    {0x36, 0x49, 0x49, 0x49, 0x36}, {0x06, 0x49, 0x49, 0x29, 0x1e},
+};
+
+static const uint8_t font_letters[26][5] = {
+    {0x7e,0x11,0x11,0x11,0x7e},{0x7f,0x49,0x49,0x49,0x36},
+    {0x3e,0x41,0x41,0x41,0x22},{0x7f,0x41,0x41,0x22,0x1c},
+    {0x7f,0x49,0x49,0x49,0x41},{0x7f,0x09,0x09,0x09,0x01},
+    {0x3e,0x41,0x49,0x49,0x7a},{0x7f,0x08,0x08,0x08,0x7f},
+    {0x00,0x41,0x7f,0x41,0x00},{0x20,0x40,0x41,0x3f,0x01},
+    {0x7f,0x08,0x14,0x22,0x41},{0x7f,0x40,0x40,0x40,0x40},
+    {0x7f,0x02,0x0c,0x02,0x7f},{0x7f,0x04,0x08,0x10,0x7f},
+    {0x3e,0x41,0x41,0x41,0x3e},{0x7f,0x09,0x09,0x09,0x06},
+    {0x3e,0x41,0x51,0x21,0x5e},{0x7f,0x09,0x19,0x29,0x46},
+    {0x46,0x49,0x49,0x49,0x31},{0x01,0x01,0x7f,0x01,0x01},
+    {0x3f,0x40,0x40,0x40,0x3f},{0x1f,0x20,0x40,0x20,0x1f},
+    {0x3f,0x40,0x38,0x40,0x3f},{0x63,0x14,0x08,0x14,0x63},
+    {0x07,0x08,0x70,0x08,0x07},{0x61,0x51,0x49,0x45,0x43},
+};
+
+static const uint8_t *glyph_for(char value) {
+    static const uint8_t blank[5] = {0};
+    static const uint8_t dash[5] = {0x08,0x08,0x08,0x08,0x08};
+    if (value >= '0' && value <= '9') return font_digits[value - '0'];
+    if (value >= 'a' && value <= 'z') value = (char)(value - 'a' + 'A');
+    if (value >= 'A' && value <= 'Z') return font_letters[value - 'A'];
+    if (value == '-') return dash;
+    return blank;
+}
+
+static void draw_char(uint16_t *frame, int x, int y, char value, int scale,
+                      uint16_t colour) {
+    const uint8_t *glyph = glyph_for(value);
+    for (int column = 0; column < 5; ++column) {
+        for (int row = 0; row < 7; ++row) {
+            if ((glyph[column] & (1u << row)) == 0) continue;
+            for (int dy = 0; dy < scale; ++dy) {
+                for (int dx = 0; dx < scale; ++dx) {
+                    put_pixel(frame, x + column * scale + dx,
+                              y + row * scale + dy, colour);
+                }
+            }
+        }
+    }
+}
+
+static int text_width(const char *text, int scale) {
+    return text == NULL ? 0 : (int)strlen(text) * 6 * scale - scale;
+}
+
+static void draw_text(uint16_t *frame, int x, int y, const char *text, int scale,
+                      uint16_t colour) {
+    for (; text != NULL && *text != '\0'; ++text, x += 6 * scale) {
+        draw_char(frame, x, y, *text, scale, colour);
+    }
+}
+
+static uint16_t battery_colour(uint8_t level) {
+    if (level == 0) return rgb565(95, 89, 100);
+    if (level <= 20) return rgb565(255, 69, 58);
+    if (level <= 50) return rgb565(255, 159, 10);
+    return rgb565(50, 215, 75);
+}
+
+static void render_dashboard(uint16_t *destination) {
+    struct {
+        uint8_t modifiers;
+        uint8_t batteries[3];
+        char layer_name[10];
+    } state;
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    state.modifiers = runtime.keyboard_modifiers;
+    memcpy(state.batteries, runtime.keyboard_batteries, sizeof(state.batteries));
+    memcpy(state.layer_name, runtime.keyboard_layer_name, sizeof(state.layer_name));
+    xSemaphoreGive(runtime.lock);
+
+    memset(destination, 0, MERRY_LCD_FRAME_BYTES);
+    const uint16_t purple = rgb565(191, 90, 242);
+    const uint16_t dim = rgb565(73, 67, 79);
+    const uint16_t rule = rgb565(44, 40, 48);
+    const char labels[3] = {'L', 'D', 'R'};
+    const int centers[3] = {42, 120, 198};
+    for (int index = 0; index < 3; ++index) {
+        char battery[8];
+        if (state.batteries[index] == 0) {
+            snprintf(battery, sizeof(battery), "%c--", labels[index]);
+        } else {
+            snprintf(battery, sizeof(battery), "%c%u", labels[index],
+                     state.batteries[index]);
+        }
+        draw_text(destination, centers[index] - text_width(battery, 2) / 2, 15,
+                  battery, 2, battery_colour(state.batteries[index]));
+    }
+    for (int x = 20; x < 220; ++x) put_pixel(destination, x, 48, rule);
+    for (int y = 76; y < 138; ++y) {
+        for (int x = 17; x < 21; ++x) put_pixel(destination, x, y, purple);
+    }
+    const int layer_scale = strlen(state.layer_name) <= 5 ? 5 : 4;
+    draw_text(destination, (240 - text_width(state.layer_name, layer_scale)) / 2,
+              88, state.layer_name, layer_scale, purple);
+    for (int x = 20; x < 220; ++x) put_pixel(destination, x, 176, rule);
+    const char *mods[3] = {"CTRL", "ALT", "SHIFT"};
+    const uint8_t masks[3] = {0x11, 0x44, 0x22};
+    for (int index = 0; index < 3; ++index) {
+        draw_text(destination, centers[index] - text_width(mods[index], 2) / 2, 199,
+                  mods[index], 2,
+                  (state.modifiers & masks[index]) != 0 ? purple : dim);
+    }
+}
+
 static void draw_media_icon(uint16_t *frame, uint8_t state) {
     const int center_x = 190;
     const int center_y = 190;
@@ -437,11 +587,12 @@ static void render_pet(uint16_t *destination, uint16_t frame_index) {
 }
 
 uint32_t merry_runtime_render(uint16_t *destination, bool *changed, bool *screen_on) {
-    enum { RENDER_NONE, RENDER_PET, RENDER_MEDIA };
+    enum { RENDER_NONE, RENDER_PET, RENDER_MEDIA, RENDER_DASHBOARD };
     static int previous_mode = RENDER_NONE;
     static uint8_t previous_animation = 0xff;
     static uint8_t previous_media_state = 0xff;
     static uint32_t previous_media_generation = UINT32_MAX;
+    static uint32_t previous_keyboard_generation = UINT32_MAX;
     static uint16_t animation_frame;
     static int64_t frame_deadline;
     static bool previous_screen_on;
@@ -451,9 +602,11 @@ uint32_t merry_runtime_render(uint16_t *destination, bool *changed, bool *screen
     expire_states_locked(now);
     const uint8_t codex = runtime.codex_state;
     const uint8_t media = runtime.media_state;
+    const bool keyboard_mode = runtime.keyboard_seen && now < runtime.keyboard_active_until;
     const bool media_mode = runtime.media_valid && codex != MERRY_ANIM_RUNNING &&
                             (media == MERRY_MEDIA_PLAYING || media == MERRY_MEDIA_PAUSED);
     const uint32_t generation = runtime.media_generation;
+    const uint32_t keyboard_generation = runtime.keyboard_generation;
     const bool on = display_should_be_on_locked(now);
     xSemaphoreGive(runtime.lock);
 
@@ -468,6 +621,16 @@ uint32_t merry_runtime_render(uint16_t *destination, bool *changed, bool *screen
     if (!previous_screen_on) {
         previous_mode = RENDER_NONE;
         previous_screen_on = true;
+    }
+    if (keyboard_mode) {
+        if (previous_mode != RENDER_DASHBOARD ||
+            previous_keyboard_generation != keyboard_generation) {
+            render_dashboard(destination);
+            *changed = true;
+            previous_mode = RENDER_DASHBOARD;
+            previous_keyboard_generation = keyboard_generation;
+        }
+        return 50;
     }
     if (media_mode) {
         if (previous_mode != RENDER_MEDIA || previous_media_state != media ||

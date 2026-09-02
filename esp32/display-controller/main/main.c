@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "merry_protocol.h"
+#include "merry_keyboard_uart.h"
 #include "merry_runtime.h"
 #include "pinmap.h"
 
@@ -152,10 +153,12 @@ void app_main(void) {
     bool screen_power = requested_power;
     backlight_set(screen_power);
 
-    ESP_LOGI(TAG, "V1-compatible protocol over CRC/ACK nRF SPI link starting");
-    /* Native USB remains a log and recovery port during two-cable development.
-     * Display traffic has moved to SPI3, so logs can no longer corrupt ACKs. */
+    ESP_LOGI(TAG, "Direct USB host protocol and keyboard status UART starting");
+    /* Protocol responses and boot logs share native USB. Silence steady-state
+     * logs before installing the parser so acknowledgements remain binary-clean. */
+    esp_log_level_set("*", ESP_LOG_NONE);
     ESP_ERROR_CHECK(merry_protocol_start());
+    ESP_ERROR_CHECK(merry_keyboard_uart_start());
 
     unsigned frame_index = 1;
     while (true) {

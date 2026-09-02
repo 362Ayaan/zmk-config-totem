@@ -10,8 +10,8 @@ include:
     shield: totem_dongle xiao_st7789_merry
     artifact-name: dongle-st7789-merry
 
-  # Two-board development target: nRF remains the USB HID/split central and
-  # forwards the proven Merry binary protocol to the ESP32-S3 over SPI.
+  # Two-board target: nRF remains USB HID/split central and sends only compact
+  # keyboard dashboard snapshots to the ESP32-S3 over D4/D5 UART.
   - board: xiao_ble//zmk
     shield: totem_dongle xiao_esp32_bridge
     artifact-name: dongle-esp32-bridge

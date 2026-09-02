@@ -1,4 +1,4 @@
-name: Build nRF ESP32 bridge diagnostic
+name: Build nRF ESP32 UART dashboard link
 
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
           west update --fetch-opt=--filter=tree:0
           west zephyr-export
 
-      - name: Build bridge firmware
+      - name: Build UART dashboard firmware
         shell: bash
         run: |
           set -o pipefail
