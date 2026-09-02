@@ -82,22 +82,22 @@ namespace MerryDongle
                 {
                     if (selected == 0) message = Query("status", false);
                     else if (selected == 1) message = StartHost();
-                    else if (selected == 2) message = Repair();
+                    else if (selected == 2) message = Repair(true);
                     else if (selected == 3) message = Query("shutdown", false);
                     else if (selected == 4)
                     {
                         config.Mode = Choose("Display mode", Modes, IndexOf(Modes, config.Mode));
-                        config.Save(ConfigPath); message = Repair();
+                        config.Save(ConfigPath); message = Repair(false);
                     }
                     else if (selected == 5)
                     {
                         int index = ChooseInt("Brightness", BrightnessValues, config.Brightness, "%");
-                        config.Brightness = BrightnessValues[index]; config.Save(ConfigPath); message = Repair();
+                        config.Brightness = BrightnessValues[index]; config.Save(ConfigPath); message = Repair(false);
                     }
                     else if (selected == 6)
                     {
                         int index = ChooseInt("Screen-off timeout", TimeoutValues, config.ScreenOffSeconds, " seconds");
-                        config.ScreenOffSeconds = TimeoutValues[index]; config.Save(ConfigPath); message = Repair();
+                        config.ScreenOffSeconds = TimeoutValues[index]; config.Save(ConfigPath); message = Repair(false);
                     }
                     else if (selected == 7) message = OpenLog();
                     else return;
@@ -166,13 +166,14 @@ namespace MerryDongle
             return "Host launch timed out; check diagnostics.";
         }
 
-        private static string Repair()
+        private static string Repair(bool hard)
         {
-            string response = Query("repair", true);
+            string command = hard ? "repair" : "restart";
+            string response = Query(command, true);
             if (response != null) return response;
             string started = StartHost();
             Thread.Sleep(300);
-            response = Query("repair", true);
+            response = Query(command, true);
             return response ?? started;
         }
 

@@ -36,6 +36,8 @@ param(
     [switch]$DryRun,
     [switch]$Once,
     [switch]$SelfTest,
+
+    [switch]$ResetDeviceOnStart,
     [switch]$DisableSpotify
 )
 
@@ -544,6 +546,25 @@ function Connect-Dongle {
     }
 
     foreach ($candidate in $candidates) {
+        if ($ResetDeviceOnStart) {
+            $resetPort = [System.IO.Ports.SerialPort]::new($candidate, 115200, 'None', 8, 'One')
+            $resetPort.DtrEnable = $false
+            $resetPort.RtsEnable = $false
+            try {
+                $resetPort.Open()
+                $resetPort.RtsEnable = $true
+                Start-Sleep -Milliseconds 100
+                $resetPort.RtsEnable = $false
+            }
+            catch {
+                # A normal protocol probe below will surface a useful error.
+            }
+            finally {
+                if ($resetPort.IsOpen) { $resetPort.Close() }
+                $resetPort.Dispose()
+            }
+            Start-Sleep -Seconds 5
+        }
         $serial = [System.IO.Ports.SerialPort]::new($candidate, 115200, 'None', 8, 'One')
         $serial.ReadTimeout = 2500
         $serial.WriteTimeout = 2500

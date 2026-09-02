@@ -49,6 +49,7 @@ namespace MerryDongle
         private static readonly string LogPath = Path.Combine(LogDirectory, "MerryHost.log");
         private static volatile bool ShutdownRequested;
         private static volatile bool RestartRequested;
+        private static volatile bool HardRepairRequested;
         private static volatile bool BridgeRunning;
         private static volatile bool BridgeConnected;
         private static PowerShell ActivePowerShell;
@@ -93,6 +94,8 @@ namespace MerryDongle
             while (!ShutdownRequested)
             {
                 MerryConfig config = MerryConfig.Load(ConfigPath);
+                bool resetDevice = HardRepairRequested;
+                HardRepairRequested = false;
                 RestartRequested = false;
                 DateTime started = DateTime.UtcNow;
                 try
@@ -113,6 +116,7 @@ namespace MerryDongle
                         if (!String.Equals(config.Port, "Auto", StringComparison.OrdinalIgnoreCase) &&
                             !String.IsNullOrWhiteSpace(config.Port))
                             shell.AddParameter("Port", config.Port);
+                        if (resetDevice) shell.AddParameter("ResetDeviceOnStart");
                         BridgeRunning = true;
                         BridgeConnected = false;
                         LastError = "none";
@@ -195,6 +199,7 @@ namespace MerryDongle
             string normalized = command.Trim().ToLowerInvariant();
             if (normalized == "restart" || normalized == "repair")
             {
+                HardRepairRequested = normalized == "repair";
                 RestartRequested = true;
                 StopActiveRunspace();
                 return "OK repair requested";
