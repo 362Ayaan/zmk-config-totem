@@ -11,6 +11,7 @@
 #include "driver/spi_slave.h"
 #include "esp_attr.h"
 #include "esp_check.h"
+#include "esp_log.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
@@ -23,6 +24,8 @@
 #define MERRY_LINK_FLAG_PAYLOAD (1u << 0)
 #define MERRY_LINK_FLAG_ACK (1u << 1)
 #define MERRY_LINK_STREAM_SIZE 4096u
+
+static const char *TAG = "merry-link";
 
 struct merry_link_header {
     uint32_t magic;
@@ -95,6 +98,13 @@ static void link_task(void *unused) {
     bool ack_notification = false;
     bool outgoing_pending = false;
     size_t outgoing_size = 0;
+    uint32_t transaction_count = 0;
+    uint32_t invalid_count = 0;
+
+    ESP_LOGI(TAG, "SPI3 slave ready: SCK=%d MOSI=%d MISO=%d CS=%d READY=%d frame=%u",
+             MERRY_LINK_PIN_SCLK, MERRY_LINK_PIN_MOSI, MERRY_LINK_PIN_MISO,
+             MERRY_LINK_PIN_CS, MERRY_LINK_PIN_READY,
+             (unsigned)sizeof(struct merry_link_frame));
 
     while (true) {
         if (!outgoing_pending) {
@@ -135,10 +145,34 @@ static void link_task(void *unused) {
         ready_set(false);
         ack_notification = false;
 
+        ++transaction_count;
+        if (transaction_count <= 4u || (transaction_count % 256u) == 0u) {
+            ESP_LOGI(TAG, "SPI transaction %lu completed", (unsigned long)transaction_count);
+        }
+
         if (!frame_valid(&spi_rx_frame)) {
+            ++invalid_count;
+            if (invalid_count <= 8u || (invalid_count % 256u) == 0u) {
+                ESP_LOGW(TAG,
+                         "invalid frame %lu: magic=%08lx version=%u flags=%02x size=%u "
+                         "header_crc=%08lx expected=%08lx",
+                         (unsigned long)invalid_count,
+                         (unsigned long)spi_rx_frame.header.magic,
+                         spi_rx_frame.header.version, spi_rx_frame.header.flags,
+                         spi_rx_frame.header.payload_size,
+                         (unsigned long)spi_rx_frame.header.header_crc32,
+                         (unsigned long)header_crc(&spi_rx_frame.header));
+            }
             continue;
         }
         const struct merry_link_header *received = &spi_rx_frame.header;
+        if (transaction_count <= 8u) {
+            ESP_LOGI(TAG,
+                     "valid frame: session=%08lx peer=%08lx seq=%u ack=%u flags=%02x size=%u",
+                     (unsigned long)received->session,
+                     (unsigned long)received->peer_session, received->sequence,
+                     received->ack_sequence, received->flags, received->payload_size);
+        }
         const bool remote_changed = !remote_known || received->session != remote_session;
         if (remote_changed) {
             remote_session = received->session;
