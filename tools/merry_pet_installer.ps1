@@ -130,7 +130,11 @@ public static class MerryPetPackBuilder
 function Resolve-PetSource([string]$Value, [string]$Directory) {
     if (Test-Path -LiteralPath $Value) {
         $path = (Resolve-Path -LiteralPath $Value).Path
-        return [pscustomobject]@{ Id=[IO.Path]::GetFileNameWithoutExtension($path).ToLowerInvariant(); Path=$path }
+        $name = [IO.Path]::GetFileNameWithoutExtension($path)
+        if ($name -ieq 'spritesheet') { $name = [IO.Directory]::GetParent($path).Name }
+        $id = ([regex]::Replace($name.ToLowerInvariant(), '[^a-z0-9_-]+', '-')).Trim('-')
+        if ($id.Length -gt 31) { $id = $id.Substring(0, 31).TrimEnd('-') }
+        return [pscustomobject]@{ Id=$id; Path=$path }
     }
     $slug = $Value.Trim()
     if ($slug -match '(?i)(?:#/|/)pets/([a-z0-9_-]+)') { $slug = $Matches[1] }
