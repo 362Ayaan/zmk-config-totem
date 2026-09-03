@@ -98,6 +98,8 @@ $hostStateMagic = [uint32]0x3153484d        # MHS1
 $hostStateResponseMagic = [uint32]0x3141484d # MHA1
 $configMagic = [uint32]0x3146434d             # MCF1
 $configResponseMagic = [uint32]0x3141464d     # MFA1
+$petInfoMagic = [uint32]0x3149504d              # MPI1
+$petInfoResponseMagic = [uint32]0x3141504d      # MPA1
 $mediaProtocolVersion = [byte]1
 $mediaWidth = [uint16]202
 $mediaHeight = [uint16]220
@@ -538,6 +540,34 @@ function Invoke-DongleConfig {
     $script:configSequence = [uint16](($script:configSequence + 1) -band 0xffff)
 }
 
+function Get-DonglePetInfo {
+    param([System.IO.Ports.SerialPort]$Serial)
+
+    $request = [BitConverter]::GetBytes($petInfoMagic)
+    $Serial.Write($request, 0, $request.Length)
+    $response = [byte[]]::new(48)
+    $offset = 0
+    while ($offset -lt $response.Length) {
+        $offset += $Serial.Read($response, $offset, $response.Length - $offset)
+    }
+    $magic = [BitConverter]::ToUInt32($response, 0)
+    $version = $response[4]
+    $slot = $response[5]
+    $status = [BitConverter]::ToUInt16($response, 6)
+    if ($magic -ne $petInfoResponseMagic -or $version -ne 1 -or $status -ne 0 -or
+        $slot -gt 1) {
+        throw ('Invalid pet-info response: magic=0x{0:x8}, version={1}, slot={2}, status={3}.' -f
+            $magic, $version, $slot, $status)
+    }
+    $id = [Text.Encoding]::ASCII.GetString($response, 16, 32).Trim([char]0)
+    return [pscustomobject]@{
+        Id = $id
+        Slot = if ($slot -eq 0) { 'A' } else { 'B' }
+        Generation = [BitConverter]::ToUInt32($response, 8)
+        MaximumBytes = [BitConverter]::ToUInt32($response, 12)
+    }
+}
+
 function Connect-Dongle {
     Disconnect-Dongle
     $candidates = @(Get-DongleCandidates)
@@ -577,6 +607,11 @@ function Connect-Dongle {
             $serial.DiscardOutBuffer()
             Invoke-DongleState -Serial $serial -State 'Idle'
             Invoke-DongleConfig -Serial $serial
+            Write-Host ('Merry display config applied: mode={0};brightness={1};timeout={2}' -f
+                $Mode, $Brightness, $ScreenOffSeconds)
+            $pet = Get-DonglePetInfo -Serial $serial
+            Write-Host ('Merry pet info: id={0};slot={1};generation={2}' -f
+                $pet.Id, $pet.Slot, $pet.Generation)
             $script:serial = $serial
             $script:selectedPort = $candidate
             return

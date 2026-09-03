@@ -55,6 +55,9 @@ namespace MerryDongle
         private static PowerShell ActivePowerShell;
         private static Thread BridgeThread;
         private static string LastError = "none";
+        private static string LastPetId = "unknown";
+        private static string LastPetSlot = "?";
+        private static string LastPetGeneration = "?";
 
         [STAThread]
         private static int Main()
@@ -170,6 +173,20 @@ namespace MerryDongle
                 string message = shell.Streams.Information[args.Index].ToString();
                 if (message.StartsWith("Merry dongle connected", StringComparison.Ordinal))
                     BridgeConnected = true;
+                if (message.StartsWith("Merry pet info: ", StringComparison.Ordinal))
+                {
+                    string[] fields = message.Substring("Merry pet info: ".Length).Split(';');
+                    foreach (string field in fields)
+                    {
+                        int equals = field.IndexOf('=');
+                        if (equals <= 0) continue;
+                        string key = field.Substring(0, equals);
+                        string value = field.Substring(equals + 1);
+                        if (key == "id") LastPetId = value;
+                        else if (key == "slot") LastPetSlot = value;
+                        else if (key == "generation") LastPetGeneration = value;
+                    }
+                }
                 Log(message);
             };
         }
@@ -201,6 +218,7 @@ namespace MerryDongle
             {
                 HardRepairRequested = normalized == "repair";
                 RestartRequested = true;
+                BridgeConnected = false;
                 StopActiveRunspace();
                 return "OK repair requested";
             }
@@ -210,6 +228,9 @@ namespace MerryDongle
                 StopActiveRunspace();
                 return "OK host shutting down";
             }
+            if (normalized == "petstatus")
+                return String.Format("OK pet={0};slot={1};generation={2}",
+                    LastPetId, LastPetSlot, LastPetGeneration);
             MerryConfig config = MerryConfig.Load(ConfigPath);
             return String.Format("OK running={0};connected={1};mode={2};brightness={3};timeout={4};port={5};lastError={6}",
                 BridgeRunning, BridgeConnected, config.Mode, config.Brightness, config.ScreenOffSeconds,

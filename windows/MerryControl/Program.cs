@@ -70,7 +70,9 @@ namespace MerryDongle
                     "Mode: " + config.Mode,
                     "Brightness: " + config.Brightness + "%",
                     "Screen-off timeout: " + FormatSeconds(config.ScreenOffSeconds),
+                    "Installed pet / A-B slot",
                     "Install / change pet",
+                    "Restore factory Merry",
                     "Open diagnostics log",
                     "Exit"
                 };
@@ -87,21 +89,26 @@ namespace MerryDongle
                     else if (selected == 3) message = Query("shutdown", false);
                     else if (selected == 4)
                     {
-                        config.Mode = Choose("Display mode", Modes, IndexOf(Modes, config.Mode));
-                        config.Save(ConfigPath); message = Repair(false);
+                        string chosen = Choose("Display mode", Modes, IndexOf(Modes, config.Mode));
+                        if (chosen != null) { config.Mode = chosen; config.Save(ConfigPath); message = Repair(false); }
+                        else message = "Display mode unchanged.";
                     }
                     else if (selected == 5)
                     {
                         int index = ChooseInt("Brightness", BrightnessValues, config.Brightness, "%");
-                        config.Brightness = BrightnessValues[index]; config.Save(ConfigPath); message = Repair(false);
+                        if (index >= 0) { config.Brightness = BrightnessValues[index]; config.Save(ConfigPath); message = Repair(false); }
+                        else message = "Brightness unchanged.";
                     }
                     else if (selected == 6)
                     {
                         int index = ChooseInt("Screen-off timeout", TimeoutValues, config.ScreenOffSeconds, " seconds");
-                        config.ScreenOffSeconds = TimeoutValues[index]; config.Save(ConfigPath); message = Repair(false);
+                        if (index >= 0) { config.ScreenOffSeconds = TimeoutValues[index]; config.Save(ConfigPath); message = Repair(false); }
+                        else message = "Screen-off timeout unchanged.";
                     }
-                    else if (selected == 7) message = InstallPet(config);
-                    else if (selected == 8) message = OpenLog();
+                    else if (selected == 7) message = Query("petstatus", false);
+                    else if (selected == 8) message = InstallPet(config);
+                    else if (selected == 9) message = RestoreFactoryPet(config);
+                    else if (selected == 10) message = OpenLog();
                     else return;
                 }
             }
@@ -141,7 +148,7 @@ namespace MerryDongle
                 if (key == ConsoleKey.UpArrow) selected = (selected + values.Length - 1) % values.Length;
                 else if (key == ConsoleKey.DownArrow) selected = (selected + 1) % values.Length;
                 else if (key == ConsoleKey.Enter) return values[selected];
-                else if (key == ConsoleKey.Escape) return values[selected];
+                else if (key == ConsoleKey.Escape) return null;
             }
         }
 
@@ -152,6 +159,7 @@ namespace MerryDongle
             string[] labels = new string[values.Length];
             for (int index = 0; index < values.Length; index++) labels[index] = values[index] + suffix;
             string chosen = Choose(title, labels, selected);
+            if (chosen == null) return -1;
             for (int index = 0; index < labels.Length; index++) if (labels[index] == chosen) return index;
             return selected;
         }
@@ -172,7 +180,17 @@ namespace MerryDongle
         {
             string command = hard ? "repair" : "restart";
             string response = Query(command, true);
-            if (response != null) return response;
+            if (response != null)
+            {
+                for (int index = 0; index < 100; index++)
+                {
+                    Thread.Sleep(100);
+                    string status = Query("status", true);
+                    if (status != null && status.IndexOf("connected=True", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return hard ? "Full repair completed and ESP reconnected." : "Settings applied to the ESP.";
+                }
+                return "Restart requested; ESP reconnect is taking longer than expected.";
+            }
             string started = StartHost();
             Thread.Sleep(300);
             response = Query(command, true);
@@ -207,17 +225,68 @@ namespace MerryDongle
             string installer = Path.Combine(BaseDirectory, "tools", "merry_pet_installer.ps1");
             if (!File.Exists(installer)) return "Pet installer is missing.";
             Console.Clear();
-            Console.CursorVisible = true;
             Console.ForegroundColor = ConsoleColor.Magenta;
             Console.WriteLine("  INSTALL / CHANGE PET\n");
             Console.ResetColor();
             Console.WriteLine("  Paste a Codex Pets slug, page URL, spritesheet, or .petpack path.");
             Console.Write("\n  Pet: ");
-            string source = (Console.ReadLine() ?? "").Trim();
-            Console.CursorVisible = false;
-            if (source.Length == 0) return "Pet installation cancelled.";
+            string source = ReadCancellableLine();
+            if (source == null || source.Trim().Length == 0) return "Pet installation cancelled.";
+            source = source.Trim();
             if (source.IndexOf('"') >= 0) return "Pet source cannot contain a double quote.";
             Console.WriteLine("\n  Converting and installing safely. The current pet remains valid until commit...");
+
+            return RunPetInstaller(config, source);
+        }
+
+        private static string RestoreFactoryPet(MerryConfig config)
+        {
+            string factory = Path.Combine(BaseDirectory, "tools", "merry.petpack");
+            if (!File.Exists(factory)) return "Factory Merry pack is missing.";
+            Console.Clear();
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine("  RESTORE FACTORY MERRY\n");
+            Console.ResetColor();
+            Console.WriteLine("  This installs the bundled known-good Merry pack into the inactive slot.");
+            Console.WriteLine("\n  Press Enter to restore, or Esc to cancel.");
+            while (true)
+            {
+                ConsoleKey key = Console.ReadKey(true).Key;
+                if (key == ConsoleKey.Escape) return "Factory restore cancelled.";
+                if (key == ConsoleKey.Enter) break;
+            }
+            Console.WriteLine("\n  Restoring through the verified A/B update path...");
+            return RunPetInstaller(config, factory);
+        }
+
+        private static string ReadCancellableLine()
+        {
+            StringBuilder value = new StringBuilder();
+            Console.CursorVisible = true;
+            try
+            {
+                while (true)
+                {
+                    ConsoleKeyInfo key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Escape) { Console.WriteLine(); return null; }
+                    if (key.Key == ConsoleKey.Enter) { Console.WriteLine(); return value.ToString(); }
+                    if (key.Key == ConsoleKey.Backspace)
+                    {
+                        if (value.Length > 0) { value.Length--; Console.Write("\b \b"); }
+                    }
+                    else if (!Char.IsControl(key.KeyChar))
+                    {
+                        value.Append(key.KeyChar); Console.Write(key.KeyChar);
+                    }
+                }
+            }
+            finally { Console.CursorVisible = false; }
+        }
+
+        private static string RunPetInstaller(MerryConfig config, string source)
+        {
+            string installer = Path.Combine(BaseDirectory, "tools", "merry_pet_installer.ps1");
+            if (!File.Exists(installer)) return "Pet installer is missing.";
 
             Query("shutdown", true);
             Thread.Sleep(700);
