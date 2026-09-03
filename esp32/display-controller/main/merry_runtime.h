@@ -72,4 +72,12 @@ bool merry_runtime_media_upload_write(size_t offset, const uint8_t *data, size_t
 bool merry_runtime_media_upload_finish(uint32_t expected_crc, uint8_t state);
 void merry_runtime_media_upload_abort(void);
 
+bool merry_runtime_pet_info(char pet_id[32], uint32_t *generation,
+                            uint32_t *maximum_size, uint8_t *active_slot);
+bool merry_runtime_pet_upload_begin(const char *pet_id, size_t pack_size,
+                                    uint32_t pack_crc32);
+bool merry_runtime_pet_upload_write(size_t offset, const uint8_t *data, size_t size);
+bool merry_runtime_pet_upload_finish(void);
+void merry_runtime_pet_upload_abort(void);
+
 uint32_t merry_crc32(const void *data, size_t size);

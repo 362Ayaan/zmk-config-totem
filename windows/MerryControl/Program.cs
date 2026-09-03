@@ -70,6 +70,7 @@ namespace MerryDongle
                     "Mode: " + config.Mode,
                     "Brightness: " + config.Brightness + "%",
                     "Screen-off timeout: " + FormatSeconds(config.ScreenOffSeconds),
+                    "Install / change pet",
                     "Open diagnostics log",
                     "Exit"
                 };
@@ -99,7 +100,8 @@ namespace MerryDongle
                         int index = ChooseInt("Screen-off timeout", TimeoutValues, config.ScreenOffSeconds, " seconds");
                         config.ScreenOffSeconds = TimeoutValues[index]; config.Save(ConfigPath); message = Repair(false);
                     }
-                    else if (selected == 7) message = OpenLog();
+                    else if (selected == 7) message = InstallPet(config);
+                    else if (selected == 8) message = OpenLog();
                     else return;
                 }
             }
@@ -198,6 +200,56 @@ namespace MerryDongle
             if (!File.Exists(path)) return "No MerryHost log exists yet.";
             Process.Start(new ProcessStartInfo("notepad.exe", "\"" + path + "\"") { UseShellExecute = true });
             return "Opened diagnostics log.";
+        }
+
+        private static string InstallPet(MerryConfig config)
+        {
+            string installer = Path.Combine(BaseDirectory, "tools", "merry_pet_installer.ps1");
+            if (!File.Exists(installer)) return "Pet installer is missing.";
+            Console.Clear();
+            Console.CursorVisible = true;
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine("  INSTALL / CHANGE PET\n");
+            Console.ResetColor();
+            Console.WriteLine("  Paste a Codex Pets slug, page URL, or local spritesheet path.");
+            Console.Write("\n  Pet: ");
+            string source = (Console.ReadLine() ?? "").Trim();
+            Console.CursorVisible = false;
+            if (source.Length == 0) return "Pet installation cancelled.";
+            if (source.IndexOf('"') >= 0) return "Pet source cannot contain a double quote.";
+            Console.WriteLine("\n  Converting and installing safely. The current pet remains valid until commit...");
+
+            Query("shutdown", true);
+            Thread.Sleep(700);
+            string result;
+            try
+            {
+                ProcessStartInfo start = new ProcessStartInfo(
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                                 "WindowsPowerShell", "v1.0", "powershell.exe"));
+                start.UseShellExecute = false;
+                start.CreateNoWindow = true;
+                start.WindowStyle = ProcessWindowStyle.Hidden;
+                start.RedirectStandardOutput = true;
+                start.RedirectStandardError = true;
+                start.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" +
+                    installer + "\" -Source \"" + source + "\"";
+                if (!String.Equals(config.Port, "Auto", StringComparison.OrdinalIgnoreCase) &&
+                    !String.IsNullOrWhiteSpace(config.Port))
+                    start.Arguments += " -Port \"" + config.Port + "\"";
+                using (Process process = Process.Start(start))
+                {
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+                    result = process.ExitCode == 0 ? output.Trim() : error.Trim();
+                    if (String.IsNullOrWhiteSpace(result))
+                        result = process.ExitCode == 0 ? "Pet installed." : "Pet installation failed.";
+                }
+            }
+            catch (Exception exception) { result = "Pet installation failed: " + exception.Message; }
+            finally { Thread.Sleep(1500); StartHost(); }
+            return result.Replace(Environment.NewLine, " ");
         }
 
         private static int IndexOf(string[] values, string value)

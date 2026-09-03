@@ -6,6 +6,7 @@ on:
       - codex/esp32-s3-display
     paths:
       - "esp32/display-controller/**"
+      - "tools/make_esp_pet_slot.py"
       - ".github/workflows/build-esp32-display.yml"
   workflow_dispatch:
 
@@ -48,6 +49,6 @@ jobs:
             esp32/display-controller/build/merry_display_controller.bin
             esp32/display-controller/build/bootloader/bootloader.bin
             esp32/display-controller/build/partition_table/partition-table.bin
-            esp32/display-controller/build/assets.bin
+            esp32/display-controller/build/pet_a.bin
             esp32/display-controller/build/flash_args
             esp32/display-controller/build/project_description.json

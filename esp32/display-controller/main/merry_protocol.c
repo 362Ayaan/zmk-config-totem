@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -23,11 +24,17 @@
 #define HOST_STATE_RESPONSE_MAGIC 0x3141484du  /* MHA1 */
 #define CONFIG_MAGIC 0x3146434du               /* MCF1 */
 #define CONFIG_RESPONSE_MAGIC 0x3141464du      /* MFA1 */
+#define PET_INFO_MAGIC 0x3149504du             /* MPI1 */
+#define PET_INFO_RESPONSE_MAGIC 0x3141504du    /* MPA1 */
+#define PET_UPLOAD_MAGIC 0x3155504du           /* MPU1 */
+#define PET_CHUNK_MAGIC 0x3143504du            /* MPC1 */
+#define PET_RESPONSE_MAGIC 0x3152504du         /* MPR1 */
 
 #define PROTOCOL_VERSION 1u
 #define MIN_TTL_MS 5000u
 #define MAX_TTL_MS 60000u
 #define CHUNK_SIZE 512u
+#define PET_CHUNK_SIZE 2048u
 #define READY_SEQUENCE 0xffffu
 #define FINAL_SEQUENCE 0xfffeu
 #define PACKET_TIMEOUT_MS 2000u
@@ -93,19 +100,42 @@ struct config_request {
     uint32_t crc32;
 } __attribute__((packed));
 
+struct pet_upload_header {
+    uint8_t version;
+    uint8_t reserved;
+    uint16_t id_length;
+    uint32_t pack_size;
+    uint32_t pack_crc32;
+    char pet_id[32];
+    uint32_t request_crc32;
+} __attribute__((packed));
+
+struct pet_info_response {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t active_slot;
+    uint16_t status;
+    uint32_t generation;
+    uint32_t maximum_size;
+    char pet_id[32];
+} __attribute__((packed));
+
 _Static_assert(sizeof(struct state_request) == 12, "state request changed");
 _Static_assert(sizeof(struct state_response) == 8, "state response changed");
 _Static_assert(sizeof(struct media_upload_header) == 20, "media header changed");
 _Static_assert(sizeof(struct chunk_header) == 8, "chunk header changed");
 _Static_assert(sizeof(struct media_response) == 8, "media response changed");
 _Static_assert(sizeof(struct config_request) == 16, "config request changed");
+_Static_assert(sizeof(struct pet_upload_header) == 48, "pet upload header changed");
+_Static_assert(sizeof(struct pet_info_response) == 48, "pet info response changed");
 
 static uint32_t pending_magic;
 
 static bool is_command(uint32_t magic) {
     return magic == CODEX_STATE_MAGIC || magic == MEDIA_UPLOAD_MAGIC ||
            magic == MEDIA_STATE_MAGIC || magic == HOST_STATE_MAGIC ||
-           magic == CONFIG_MAGIC;
+           magic == CONFIG_MAGIC || magic == PET_INFO_MAGIC ||
+           magic == PET_UPLOAD_MAGIC;
 }
 
 static bool read_exact(void *destination, size_t size, uint32_t timeout_ms) {
@@ -342,6 +372,95 @@ static void handle_media_upload(void) {
     send_media_response(FINAL_SEQUENCE, accepted ? STATUS_OK : STATUS_FINALIZE_FAILED);
 }
 
+static void send_pet_response(uint16_t sequence, uint16_t status) {
+    const struct media_response response = {
+        .magic = PET_RESPONSE_MAGIC,
+        .sequence = sequence,
+        .status = status,
+    };
+    (void)write_exact(&response, sizeof(response));
+}
+
+static void handle_pet_info(void) {
+    struct pet_info_response response = {
+        .magic = PET_INFO_RESPONSE_MAGIC,
+        .version = PROTOCOL_VERSION,
+    };
+    if (!merry_runtime_pet_info(response.pet_id, &response.generation,
+                                &response.maximum_size, &response.active_slot)) {
+        response.status = STATUS_WRITE_FAILED;
+    }
+    (void)write_exact(&response, sizeof(response));
+}
+
+static void handle_pet_upload(void) {
+    struct pet_upload_header upload = {0};
+    if (!read_exact(&upload, sizeof(upload), PACKET_TIMEOUT_MS) ||
+        upload.version != PROTOCOL_VERSION || upload.reserved != 0 ||
+        upload.id_length == 0 || upload.id_length >= sizeof(upload.pet_id) ||
+        upload.pet_id[upload.id_length] != '\0' ||
+        strnlen(upload.pet_id, sizeof(upload.pet_id)) != upload.id_length ||
+        merry_crc32(&upload, offsetof(struct pet_upload_header, request_crc32)) !=
+            upload.request_crc32) {
+        send_pet_response(READY_SEQUENCE, STATUS_BAD_HEADER);
+        return;
+    }
+    if (!merry_runtime_pet_upload_begin(upload.pet_id, upload.pack_size,
+                                        upload.pack_crc32)) {
+        send_pet_response(READY_SEQUENCE, STATUS_WRITE_FAILED);
+        return;
+    }
+    send_pet_response(READY_SEQUENCE, STATUS_OK);
+
+    uint8_t chunk[PET_CHUNK_SIZE];
+    uint32_t offset = 0;
+    uint16_t expected_sequence = 0;
+    while (offset < upload.pack_size) {
+        if (!wait_for_magic(PET_CHUNK_MAGIC, PACKET_TIMEOUT_MS, true)) {
+            merry_runtime_pet_upload_abort();
+            return;
+        }
+        struct chunk_header header = {0};
+        if (!read_exact(&header, sizeof(header), PACKET_TIMEOUT_MS) ||
+            header.size == 0 || header.size > sizeof(chunk) ||
+            header.size > upload.pack_size - offset) {
+            send_pet_response(expected_sequence, STATUS_BAD_CHUNK);
+            merry_runtime_pet_upload_abort();
+            return;
+        }
+        if (!read_exact(chunk, header.size, PACKET_TIMEOUT_MS)) {
+            send_pet_response(expected_sequence, STATUS_BAD_CHUNK);
+            merry_runtime_pet_upload_abort();
+            return;
+        }
+        if (header.sequence != expected_sequence) {
+            send_pet_response(header.sequence, STATUS_BAD_SEQUENCE);
+            merry_runtime_pet_upload_abort();
+            return;
+        }
+        if (merry_crc32(chunk, header.size) != header.crc32) {
+            send_pet_response(header.sequence, STATUS_BAD_CRC);
+            merry_runtime_pet_upload_abort();
+            return;
+        }
+        if (!merry_runtime_pet_upload_write(offset, chunk, header.size)) {
+            send_pet_response(header.sequence, STATUS_WRITE_FAILED);
+            merry_runtime_pet_upload_abort();
+            return;
+        }
+        send_pet_response(header.sequence, STATUS_OK);
+        offset += header.size;
+        ++expected_sequence;
+    }
+
+    const bool accepted = merry_runtime_pet_upload_finish();
+    send_pet_response(FINAL_SEQUENCE, accepted ? STATUS_OK : STATUS_FINALIZE_FAILED);
+    if (accepted) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+        esp_restart();
+    }
+}
+
 static void protocol_task(void *unused) {
     (void)unused;
     while (true) {
@@ -356,6 +475,10 @@ static void protocol_task(void *unused) {
             handle_media_upload();
         } else if (command == CONFIG_MAGIC) {
             handle_config();
+        } else if (command == PET_INFO_MAGIC) {
+            handle_pet_info();
+        } else if (command == PET_UPLOAD_MAGIC) {
+            handle_pet_upload();
         }
     }
 }
@@ -369,7 +492,7 @@ esp_err_t merry_protocol_start(void) {
     if (err != ESP_OK) {
         return err;
     }
-    if (xTaskCreatePinnedToCore(protocol_task, "merry-protocol", 6144, NULL, 8, NULL, 0) !=
+    if (xTaskCreatePinnedToCore(protocol_task, "merry-protocol", 8192, NULL, 8, NULL, 0) !=
         pdPASS) {
         usb_serial_jtag_driver_uninstall();
         return ESP_ERR_NO_MEM;

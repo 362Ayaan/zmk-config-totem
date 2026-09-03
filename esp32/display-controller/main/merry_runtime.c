@@ -6,15 +6,19 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
-#include "esp_spiffs.h"
+#include "esp_partition.h"
 #include "esp_timer.h"
+#include "spi_flash_mmap.h"
 #include "freertos/semphr.h"
 #include "generated_layer_labels.h"
 
 #define MERRY_PACK_MAGIC 0x3546504du /* MPF5 */
 #define MERRY_PACK_VERSION 1u
-#define MERRY_PACK_PATH "/assets/merry-full.petpack"
 #define MERRY_ANIMATION_COUNT 5u
+#define MERRY_PET_SLOT_MAGIC 0x3153504du /* MPS1 */
+#define MERRY_PET_SLOT_VERSION 1u
+#define MERRY_PET_DATA_OFFSET 4096u
+#define MERRY_PET_ID_BYTES 32u
 #define MERRY_DEFAULT_SCREEN_OFF_DELAY_MS 300000u
 #define MERRY_DEFAULT_MEDIA_TTL_MS 12000u
 #define MERRY_KEYBOARD_ACTIVE_MS 20000u
@@ -49,15 +53,39 @@ struct merry_frame_desc {
     uint16_t reserved;
 } __attribute__((packed));
 
+struct merry_pet_slot_header {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t generation;
+    uint32_t pack_size;
+    uint32_t pack_crc32;
+    char pet_id[MERRY_PET_ID_BYTES];
+    uint32_t reserved[2];
+    uint32_t header_crc32;
+} __attribute__((packed));
+
 _Static_assert(sizeof(struct merry_pack_header) == 64, "Merry pack header changed");
 _Static_assert(sizeof(struct merry_animation_desc) == 8, "Merry animation descriptor changed");
 _Static_assert(sizeof(struct merry_frame_desc) == 8, "Merry frame descriptor changed");
+_Static_assert(sizeof(struct merry_pet_slot_header) == 64, "Merry pet slot header changed");
 
 struct merry_context {
     SemaphoreHandle_t lock;
     TaskHandle_t renderer;
-    uint8_t *pack;
+    const uint8_t *pack;
     size_t pack_size;
+    const esp_partition_t *pet_slots[2];
+    esp_partition_mmap_handle_t pack_map;
+    uint8_t active_pet_slot;
+    uint32_t pet_generation;
+    char pet_id[MERRY_PET_ID_BYTES];
+    bool pet_upload_active;
+    uint8_t pet_upload_slot;
+    size_t pet_upload_size;
+    size_t pet_upload_written;
+    uint32_t pet_upload_crc32;
+    char pet_upload_id[MERRY_PET_ID_BYTES];
     const struct merry_pack_header *header;
     const struct merry_animation_desc *animations;
     const struct merry_frame_desc *frames;
@@ -116,17 +144,17 @@ static bool range_valid(uint32_t offset, uint32_t size, uint32_t total) {
     return offset <= total && size <= total - offset;
 }
 
-static bool validate_pack(void) {
-    if (runtime.pack_size < sizeof(struct merry_pack_header)) {
+static bool validate_pack_bytes(const uint8_t *pack, size_t pack_size) {
+    if (pack == NULL || pack_size < sizeof(struct merry_pack_header)) {
         return false;
     }
-    const struct merry_pack_header *header = (const void *)runtime.pack;
+    const struct merry_pack_header *header = (const void *)pack;
     const uint32_t frame_bytes = (uint32_t)header->width * header->height * 2u;
     if (header->magic != MERRY_PACK_MAGIC || header->version != MERRY_PACK_VERSION ||
         header->header_size != sizeof(*header) || header->width > MERRY_LCD_WIDTH ||
         header->height > MERRY_LCD_HEIGHT || header->frame_count == 0 ||
         header->animation_count != MERRY_ANIMATION_COUNT ||
-        header->total_size != runtime.pack_size ||
+        header->total_size != pack_size ||
         !range_valid(header->animation_offset,
                      header->animation_count * sizeof(struct merry_animation_desc),
                      header->total_size) ||
@@ -134,16 +162,15 @@ static bool validate_pack(void) {
                      header->frame_count * sizeof(struct merry_frame_desc),
                      header->total_size) ||
         header->data_offset > header->total_size ||
-        merry_crc32(runtime.pack + header->header_size,
+        merry_crc32(pack + header->header_size,
                     header->total_size - header->header_size) != header->content_crc) {
         return false;
     }
-
-    runtime.header = header;
-    runtime.animations = (const void *)(runtime.pack + header->animation_offset);
-    runtime.frames = (const void *)(runtime.pack + header->frame_offset);
+    const struct merry_animation_desc *animations =
+        (const void *)(pack + header->animation_offset);
+    const struct merry_frame_desc *frames = (const void *)(pack + header->frame_offset);
     for (uint16_t index = 0; index < header->animation_count; ++index) {
-        const struct merry_animation_desc *animation = &runtime.animations[index];
+        const struct merry_animation_desc *animation = &animations[index];
         if (animation->id != index || animation->frame_count == 0 ||
             animation->first_frame > header->frame_count ||
             animation->frame_count > header->frame_count - animation->first_frame ||
@@ -152,7 +179,7 @@ static bool validate_pack(void) {
         }
     }
     for (uint16_t index = 0; index < header->frame_count; ++index) {
-        const struct merry_frame_desc *frame = &runtime.frames[index];
+        const struct merry_frame_desc *frame = &frames[index];
         if (frame->duration_ms < 20 || frame->reserved != 0 ||
             !range_valid(frame->data_offset, frame_bytes, header->total_size)) {
             return false;
@@ -161,42 +188,73 @@ static bool validate_pack(void) {
     return true;
 }
 
-static esp_err_t load_pack(void) {
-    const esp_vfs_spiffs_conf_t storage = {
-        .base_path = "/assets",
-        .partition_label = "assets",
-        .max_files = 2,
-        .format_if_mount_failed = false,
-    };
-    esp_err_t err = esp_vfs_spiffs_register(&storage);
-    if (err != ESP_OK) {
-        return err;
-    }
+static bool valid_slot_header(const struct merry_pet_slot_header *header,
+                              const esp_partition_t *partition) {
+    return header->magic == MERRY_PET_SLOT_MAGIC &&
+           header->version == MERRY_PET_SLOT_VERSION &&
+           header->header_size == sizeof(*header) && header->pack_size > 0 &&
+           header->pack_size <= partition->size - MERRY_PET_DATA_OFFSET &&
+           header->pet_id[0] != '\0' && header->pet_id[MERRY_PET_ID_BYTES - 1] == '\0' &&
+           header->reserved[0] == 0 && header->reserved[1] == 0 &&
+           merry_crc32(header, offsetof(struct merry_pet_slot_header, header_crc32)) ==
+               header->header_crc32;
+}
 
-    FILE *file = fopen(MERRY_PACK_PATH, "rb");
-    if (file == NULL || fseek(file, 0, SEEK_END) != 0) {
-        if (file != NULL) {
-            fclose(file);
-        }
-        return ESP_ERR_NOT_FOUND;
-    }
-    const long length = ftell(file);
-    if (length <= 0 || fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        return ESP_ERR_INVALID_SIZE;
-    }
-    runtime.pack_size = (size_t)length;
-    runtime.pack = heap_caps_aligned_alloc(64, runtime.pack_size,
-                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (runtime.pack == NULL) {
-        fclose(file);
-        return ESP_ERR_NO_MEM;
-    }
-    const size_t read = fread(runtime.pack, 1, runtime.pack_size, file);
-    fclose(file);
-    if (read != runtime.pack_size || !validate_pack()) {
+static bool generation_newer(uint32_t left, uint32_t right) {
+    return (int32_t)(left - right) > 0;
+}
+
+static esp_err_t map_slot(uint8_t slot, const struct merry_pet_slot_header *header,
+                          const uint8_t **pack, esp_partition_mmap_handle_t *map) {
+    const void *mapped = NULL;
+    esp_err_t err = esp_partition_mmap(runtime.pet_slots[slot], MERRY_PET_DATA_OFFSET,
+                                       header->pack_size, ESP_PARTITION_MMAP_DATA,
+                                       &mapped, map);
+    if (err != ESP_OK) return err;
+    if (merry_crc32(mapped, header->pack_size) != header->pack_crc32 ||
+        !validate_pack_bytes(mapped, header->pack_size)) {
+        esp_partition_munmap(*map);
         return ESP_ERR_INVALID_CRC;
     }
+    *pack = mapped;
+    return ESP_OK;
+}
+
+static esp_err_t load_pack(void) {
+    runtime.pet_slots[0] = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "pet_a");
+    runtime.pet_slots[1] = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x41, "pet_b");
+    if (runtime.pet_slots[0] == NULL || runtime.pet_slots[1] == NULL) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    bool found = false;
+    struct merry_pet_slot_header chosen = {0};
+    uint8_t chosen_slot = 0;
+    for (uint8_t slot = 0; slot < 2; ++slot) {
+        struct merry_pet_slot_header header = {0};
+        if (esp_partition_read(runtime.pet_slots[slot], 0, &header, sizeof(header)) != ESP_OK ||
+            !valid_slot_header(&header, runtime.pet_slots[slot])) continue;
+        const uint8_t *candidate = NULL;
+        esp_partition_mmap_handle_t candidate_map = 0;
+        if (map_slot(slot, &header, &candidate, &candidate_map) != ESP_OK) continue;
+        esp_partition_munmap(candidate_map);
+        if (!found || generation_newer(header.generation, chosen.generation)) {
+            found = true;
+            chosen = header;
+            chosen_slot = slot;
+        }
+    }
+    if (!found) return ESP_ERR_INVALID_CRC;
+
+    esp_err_t err = map_slot(chosen_slot, &chosen, &runtime.pack, &runtime.pack_map);
+    if (err != ESP_OK) return err;
+    runtime.pack_size = chosen.pack_size;
+    runtime.active_pet_slot = chosen_slot;
+    runtime.pet_generation = chosen.generation;
+    memcpy(runtime.pet_id, chosen.pet_id, sizeof(runtime.pet_id));
+    runtime.header = (const void *)runtime.pack;
+    runtime.animations = (const void *)(runtime.pack + runtime.header->animation_offset);
+    runtime.frames = (const void *)(runtime.pack + runtime.header->frame_offset);
     return ESP_OK;
 }
 
@@ -440,6 +498,116 @@ bool merry_runtime_media_upload_finish(uint32_t expected_crc, uint8_t state) {
 void merry_runtime_media_upload_abort(void) {
     xSemaphoreTake(runtime.lock, portMAX_DELAY);
     runtime.upload_active = false;
+    xSemaphoreGive(runtime.lock);
+}
+
+bool merry_runtime_pet_info(char pet_id[MERRY_PET_ID_BYTES], uint32_t *generation,
+                            uint32_t *maximum_size, uint8_t *active_slot) {
+    if (pet_id == NULL || generation == NULL || maximum_size == NULL ||
+        active_slot == NULL) return false;
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    memcpy(pet_id, runtime.pet_id, MERRY_PET_ID_BYTES);
+    *generation = runtime.pet_generation;
+    *maximum_size = runtime.pet_slots[0]->size - MERRY_PET_DATA_OFFSET;
+    *active_slot = runtime.active_pet_slot;
+    xSemaphoreGive(runtime.lock);
+    return true;
+}
+
+bool merry_runtime_pet_upload_begin(const char *pet_id, size_t pack_size,
+                                    uint32_t pack_crc32) {
+    if (pet_id == NULL || pet_id[0] == '\0' ||
+        strnlen(pet_id, MERRY_PET_ID_BYTES) >= MERRY_PET_ID_BYTES ||
+        pack_size == 0 || runtime.pet_slots[0] == NULL ||
+        pack_size > runtime.pet_slots[0]->size - MERRY_PET_DATA_OFFSET) return false;
+
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    if (runtime.pet_upload_active) {
+        xSemaphoreGive(runtime.lock);
+        return false;
+    }
+    runtime.pet_upload_active = true;
+    runtime.pet_upload_slot = runtime.active_pet_slot ^ 1u;
+    runtime.pet_upload_size = pack_size;
+    runtime.pet_upload_written = 0;
+    runtime.pet_upload_crc32 = pack_crc32;
+    snprintf(runtime.pet_upload_id, sizeof(runtime.pet_upload_id), "%s", pet_id);
+    const esp_partition_t *partition = runtime.pet_slots[runtime.pet_upload_slot];
+    xSemaphoreGive(runtime.lock);
+
+    if (esp_partition_erase_range(partition, 0, partition->size) != ESP_OK) {
+        merry_runtime_pet_upload_abort();
+        return false;
+    }
+    return true;
+}
+
+bool merry_runtime_pet_upload_write(size_t offset, const uint8_t *data, size_t size) {
+    if (data == NULL || size == 0) return false;
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    const bool valid = runtime.pet_upload_active && offset == runtime.pet_upload_written &&
+                       offset <= runtime.pet_upload_size &&
+                       size <= runtime.pet_upload_size - offset;
+    const esp_partition_t *partition = valid ? runtime.pet_slots[runtime.pet_upload_slot] : NULL;
+    xSemaphoreGive(runtime.lock);
+    if (!valid || esp_partition_write(partition, MERRY_PET_DATA_OFFSET + offset,
+                                      data, size) != ESP_OK) return false;
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    runtime.pet_upload_written += size;
+    xSemaphoreGive(runtime.lock);
+    return true;
+}
+
+bool merry_runtime_pet_upload_finish(void) {
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    const bool complete = runtime.pet_upload_active &&
+                          runtime.pet_upload_written == runtime.pet_upload_size;
+    const uint8_t slot = runtime.pet_upload_slot;
+    const size_t pack_size = runtime.pet_upload_size;
+    const uint32_t pack_crc32 = runtime.pet_upload_crc32;
+    const uint32_t generation = runtime.pet_generation + 1u;
+    char pet_id[MERRY_PET_ID_BYTES];
+    memcpy(pet_id, runtime.pet_upload_id, sizeof(pet_id));
+    xSemaphoreGive(runtime.lock);
+    if (!complete) {
+        merry_runtime_pet_upload_abort();
+        return false;
+    }
+
+    struct merry_pet_slot_header header = {
+        .magic = MERRY_PET_SLOT_MAGIC,
+        .version = MERRY_PET_SLOT_VERSION,
+        .header_size = sizeof(header),
+        .generation = generation,
+        .pack_size = pack_size,
+        .pack_crc32 = pack_crc32,
+    };
+    memcpy(header.pet_id, pet_id, sizeof(header.pet_id));
+
+    const uint8_t *mapped = NULL;
+    esp_partition_mmap_handle_t map = 0;
+    if (map_slot(slot, &header, &mapped, &map) != ESP_OK) {
+        merry_runtime_pet_upload_abort();
+        return false;
+    }
+    esp_partition_munmap(map);
+    header.header_crc32 = merry_crc32(
+        &header, offsetof(struct merry_pet_slot_header, header_crc32));
+    if (esp_partition_write(runtime.pet_slots[slot], 0, &header, sizeof(header)) != ESP_OK) {
+        merry_runtime_pet_upload_abort();
+        return false;
+    }
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    runtime.pet_upload_active = false;
+    xSemaphoreGive(runtime.lock);
+    return true;
+}
+
+void merry_runtime_pet_upload_abort(void) {
+    xSemaphoreTake(runtime.lock, portMAX_DELAY);
+    runtime.pet_upload_active = false;
+    runtime.pet_upload_size = 0;
+    runtime.pet_upload_written = 0;
     xSemaphoreGive(runtime.lock);
 }
 

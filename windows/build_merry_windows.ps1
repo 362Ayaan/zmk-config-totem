@@ -31,6 +31,10 @@ if ($LASTEXITCODE -ne 0) { throw 'MerryControl compilation failed.' }
 
 Copy-Item (Join-Path $root 'tools\merry_codex_bridge.ps1') (Join-Path $output 'tools') -Force
 Copy-Item (Join-Path $root 'tools\merry_media_helpers.ps1') (Join-Path $output 'tools') -Force
+Copy-Item (Join-Path $root 'tools\merry_pet_installer.ps1') (Join-Path $output 'tools') -Force
+New-Item -ItemType Directory -Path (Join-Path $output 'tools\libwebp') -Force | Out-Null
+Copy-Item (Join-Path $root 'tools\libwebp\dwebp.exe') (Join-Path $output 'tools\libwebp') -Force
+Copy-Item (Join-Path $root 'tools\libwebp\COPYING') (Join-Path $output 'tools\libwebp') -Force
 
 $default = '{"Mode":"Auto","Brightness":100,"ScreenOffSeconds":300,"Port":"Auto"}'
 [IO.File]::WriteAllText((Join-Path $output 'MerryConfig.json'), $default,
