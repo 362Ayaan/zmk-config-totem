@@ -211,7 +211,7 @@ namespace MerryDongle
             Console.ForegroundColor = ConsoleColor.Magenta;
             Console.WriteLine("  INSTALL / CHANGE PET\n");
             Console.ResetColor();
-            Console.WriteLine("  Paste a Codex Pets slug, page URL, or local spritesheet path.");
+            Console.WriteLine("  Paste a Codex Pets slug, page URL, spritesheet, or .petpack path.");
             Console.Write("\n  Pet: ");
             string source = (Console.ReadLine() ?? "").Trim();
             Console.CursorVisible = false;

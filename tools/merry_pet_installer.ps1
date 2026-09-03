@@ -195,8 +195,12 @@ $work = Join-Path ([IO.Path]::GetTempPath()) ('MerryPet-' + [Guid]::NewGuid().To
 try {
     $resolved=Resolve-PetSource $Source $work
     if ($resolved.Id -notmatch '^[a-z0-9_-]{1,31}$') { throw 'Pet id must contain only letters, digits, underscore, or hyphen (31 max).' }
-    $png=Join-Path $work 'spritesheet.png'; Convert-WebpToPng $resolved.Path $png
-    [byte[]]$pack=[MerryPetPackBuilder]::Build($png)
+    if ([IO.Path]::GetExtension($resolved.Path) -ieq '.petpack') {
+        [byte[]]$pack=[IO.File]::ReadAllBytes($resolved.Path)
+    } else {
+        $png=Join-Path $work 'spritesheet.png'; Convert-WebpToPng $resolved.Path $png
+        [byte[]]$pack=[MerryPetPackBuilder]::Build($png)
+    }
     if ($OutputPack) { [IO.File]::WriteAllBytes([IO.Path]::GetFullPath($OutputPack),$pack) }
     if ($ConvertOnly) { Write-Output ("OK converted pet={0};bytes={1};crc={2:x8}" -f $resolved.Id,$pack.Length,[MerryPetCrc32]::Compute($pack)); exit 0 }
 
