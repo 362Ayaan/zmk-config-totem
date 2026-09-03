@@ -8,7 +8,6 @@
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
 #include "esp_timer.h"
-#include "spi_flash_mmap.h"
 #include "freertos/semphr.h"
 #include "generated_layer_labels.h"
 
